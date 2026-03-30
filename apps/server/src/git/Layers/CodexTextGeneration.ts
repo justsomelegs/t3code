@@ -9,7 +9,9 @@ import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shar
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { inferExecutionEnvironmentFromCwd } from "../../executionEnvironment.ts";
 import { makeRuntimeCommand } from "../../processRunner.ts";
+import { getServerRuntimeEnvironment } from "../../runtimeEnvironment.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
   type BranchNameGenerationInput,
@@ -146,6 +148,12 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         );
         const reasoningEffort =
           modelSelection.options?.reasoningEffort ?? CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT;
+        const { hostRuntime, availableExecutionEnvironments } = getServerRuntimeEnvironment();
+        const executionEnvironment = inferExecutionEnvironmentFromCwd({
+          cwd,
+          hostRuntime,
+          availableExecutionEnvironments,
+        });
         const command = makeRuntimeCommand(
           "codex",
           [
@@ -167,6 +175,8 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ],
           {
             cwd,
+            hostRuntime,
+            executionEnvironment,
             stdin: {
               stream: Stream.encodeText(Stream.make(prompt)),
             },

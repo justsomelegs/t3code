@@ -27,7 +27,9 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
+import { inferExecutionEnvironmentFromCwd } from "./executionEnvironment";
 import { resolveProcessLaunchPlan } from "./processRunner";
+import { getServerRuntimeEnvironment } from "./runtimeEnvironment";
 
 type PendingRequestKey = string;
 
@@ -545,9 +547,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexOptions = readCodexProviderOptions(input);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const { hostRuntime, availableExecutionEnvironments } = getServerRuntimeEnvironment();
+      const executionEnvironment = inferExecutionEnvironmentFromCwd({
+        cwd: resolvedCwd,
+        hostRuntime,
+        availableExecutionEnvironments,
+      });
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
+        hostRuntime,
+        executionEnvironment,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
       const childLaunchPlan = resolveProcessLaunchPlan(codexBinaryPath, ["app-server"], {
@@ -556,9 +566,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           ...process.env,
           ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
         },
+        hostRuntime,
+        executionEnvironment,
       });
       const child = spawn(childLaunchPlan.command, childLaunchPlan.args, {
-        cwd: resolvedCwd,
+        cwd: childLaunchPlan.cwd,
         env: {
           ...process.env,
           ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
@@ -1370,6 +1382,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private assertSupportedCodexCliVersion(input: {
     readonly binaryPath: string;
     readonly cwd: string;
+    readonly hostRuntime: import("@t3tools/contracts").ServerHostRuntime;
+    readonly executionEnvironment: import("@t3tools/contracts").ServerExecutionEnvironment;
     readonly homePath?: string;
   }): void {
     assertSupportedCodexCliVersion(input);
@@ -1616,6 +1630,8 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
 function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
+  readonly hostRuntime: import("@t3tools/contracts").ServerHostRuntime;
+  readonly executionEnvironment: import("@t3tools/contracts").ServerExecutionEnvironment;
   readonly homePath?: string;
 }): void {
   const env = {
@@ -1625,9 +1641,11 @@ function assertSupportedCodexCliVersion(input: {
   const launchPlan = resolveProcessLaunchPlan(input.binaryPath, ["--version"], {
     cwd: input.cwd,
     env,
+    hostRuntime: input.hostRuntime,
+    executionEnvironment: input.executionEnvironment,
   });
   const result = spawnSync(launchPlan.command, launchPlan.args, {
-    cwd: input.cwd,
+    cwd: launchPlan.cwd,
     env,
     encoding: "utf8",
     shell: launchPlan.shell,

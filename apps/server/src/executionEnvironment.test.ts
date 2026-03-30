@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveExecutionEnvironment } from "./executionEnvironment";
+import {
+  inferExecutionEnvironmentFromCwd,
+  resolveExecutionEnvironment,
+} from "./executionEnvironment";
 
 describe("resolveExecutionEnvironment", () => {
   const windowsHostRuntime = {
@@ -82,5 +85,59 @@ describe("resolveExecutionEnvironment", () => {
         preference: { kind: "wsl", distroName: "Ubuntu-24.04" },
       }),
     ).toThrow("WSL execution was requested, but no WSL distributions are available.");
+  });
+});
+
+describe("inferExecutionEnvironmentFromCwd", () => {
+  const windowsHostRuntime = {
+    rawPlatform: "win32",
+    osFamily: "windows" as const,
+    pathStyle: "windows" as const,
+    isWsl: false,
+    wslDistroName: null,
+  };
+
+  const availableExecutionEnvironments = [
+    { kind: "host" as const },
+    { kind: "wsl" as const, distroName: "Ubuntu-24.04" },
+    { kind: "wsl" as const, distroName: "Arch" },
+  ];
+
+  it("infers WSL execution from UNC WSL workspace paths", () => {
+    expect(
+      inferExecutionEnvironmentFromCwd({
+        cwd: "\\\\wsl$\\Arch\\home\\mike\\repo",
+        hostRuntime: windowsHostRuntime,
+        availableExecutionEnvironments,
+      }),
+    ).toEqual({
+      kind: "wsl",
+      distroName: "Arch",
+    });
+  });
+
+  it("infers default-distro WSL execution from POSIX workspace paths on Windows", () => {
+    expect(
+      inferExecutionEnvironmentFromCwd({
+        cwd: "/home/mike/repo",
+        hostRuntime: windowsHostRuntime,
+        availableExecutionEnvironments,
+      }),
+    ).toEqual({
+      kind: "wsl",
+      distroName: "Ubuntu-24.04",
+    });
+  });
+
+  it("keeps Windows drive workspace paths on the host", () => {
+    expect(
+      inferExecutionEnvironmentFromCwd({
+        cwd: "C:\\Users\\mike\\repo",
+        hostRuntime: windowsHostRuntime,
+        availableExecutionEnvironments,
+      }),
+    ).toEqual({
+      kind: "host",
+    });
   });
 });

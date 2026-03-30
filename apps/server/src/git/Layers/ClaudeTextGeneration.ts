@@ -14,7 +14,9 @@ import { ClaudeModelSelection } from "@t3tools/contracts";
 import { normalizeClaudeModelOptions } from "@t3tools/shared/model";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
+import { inferExecutionEnvironmentFromCwd } from "../../executionEnvironment.ts";
 import { makeRuntimeCommand } from "../../processRunner.ts";
+import { getServerRuntimeEnvironment } from "../../runtimeEnvironment.ts";
 import { TextGenerationError } from "../Errors.ts";
 import { type TextGenerationShape, TextGeneration } from "../Services/TextGeneration.ts";
 import {
@@ -88,6 +90,12 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
       };
 
       const runClaudeCommand = Effect.gen(function* () {
+        const { hostRuntime, availableExecutionEnvironments } = getServerRuntimeEnvironment();
+        const executionEnvironment = inferExecutionEnvironmentFromCwd({
+          cwd,
+          hostRuntime,
+          availableExecutionEnvironments,
+        });
         const command = makeRuntimeCommand(
           "claude",
           [
@@ -104,6 +112,8 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
           ],
           {
             cwd,
+            hostRuntime,
+            executionEnvironment,
             stdin: {
               stream: Stream.encodeText(Stream.make(prompt)),
             },

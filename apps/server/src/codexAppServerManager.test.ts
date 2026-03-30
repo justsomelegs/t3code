@@ -374,6 +374,8 @@ describe("startSession", () => {
           assertSupportedCodexCliVersion: (input: {
             binaryPath: string;
             cwd: string;
+            hostRuntime: import("@t3tools/contracts").ServerHostRuntime;
+            executionEnvironment: import("@t3tools/contracts").ServerExecutionEnvironment;
             homePath?: string;
           }) => void;
         },

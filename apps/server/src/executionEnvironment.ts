@@ -1,5 +1,7 @@
 import type { ServerExecutionEnvironment, ServerHostRuntime } from "@t3tools/contracts";
 
+import { isPosixPath, parseWslUncPath } from "./pathInterop";
+
 export type ExecutionEnvironmentPreference =
   | {
       readonly kind: "auto";
@@ -16,6 +18,12 @@ interface ResolveExecutionEnvironmentOptions {
   readonly hostRuntime: ServerHostRuntime;
   readonly availableExecutionEnvironments: ReadonlyArray<ServerExecutionEnvironment>;
   readonly preference?: ExecutionEnvironmentPreference | undefined;
+}
+
+interface InferExecutionEnvironmentFromCwdOptions {
+  readonly cwd: string;
+  readonly hostRuntime: ServerHostRuntime;
+  readonly availableExecutionEnvironments: ReadonlyArray<ServerExecutionEnvironment>;
 }
 
 function isMatchingWslEnvironment(
@@ -59,4 +67,37 @@ export function resolveExecutionEnvironment(
   }
 
   return matchingEnvironment;
+}
+
+export function inferExecutionEnvironmentFromCwd(
+  options: InferExecutionEnvironmentFromCwdOptions,
+): ServerExecutionEnvironment {
+  if (options.hostRuntime.osFamily !== "windows") {
+    return { kind: "host" };
+  }
+
+  const uncPath = parseWslUncPath(options.cwd);
+  if (uncPath) {
+    return resolveExecutionEnvironment({
+      hostRuntime: options.hostRuntime,
+      availableExecutionEnvironments: options.availableExecutionEnvironments,
+      preference: {
+        kind: "wsl",
+        distroName: uncPath.distroName,
+      },
+    });
+  }
+
+  if (isPosixPath(options.cwd)) {
+    return resolveExecutionEnvironment({
+      hostRuntime: options.hostRuntime,
+      availableExecutionEnvironments: options.availableExecutionEnvironments,
+      preference: {
+        kind: "wsl",
+        distroName: null,
+      },
+    });
+  }
+
+  return { kind: "host" };
 }

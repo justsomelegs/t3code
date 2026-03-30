@@ -11,6 +11,7 @@ import {
   resolveWindowsPathExtensions,
   stripWrappingQuotes,
 } from "./commandResolution";
+import { resolveWslCommand, resolveWslWorkingDirectory } from "./pathInterop";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -48,6 +49,7 @@ export interface ProcessLaunchPlan {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly shell: boolean | string;
+  readonly cwd?: string | undefined;
 }
 
 interface ResolvedWindowsCommand {
@@ -193,6 +195,58 @@ function resolveWindowsCommandShell(env: NodeJS.ProcessEnv): string {
   return env.ComSpec ?? env.COMSPEC ?? process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe";
 }
 
+function resolveWindowsExecutableCommand(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  cwd?: string,
+): string {
+  const resolved = resolveWindowsCommand(command, env, cwd);
+  if (resolved) {
+    return resolved.path;
+  }
+
+  return command;
+}
+
+function resolveHostSpawnCwd(options: ProcessLaunchPlanOptions): string | undefined {
+  if (options.executionEnvironment?.kind === "wsl") {
+    return undefined;
+  }
+
+  return options.cwd;
+}
+
+function resolveWslProcessLaunchPlan(
+  command: string,
+  args: ReadonlyArray<string>,
+  options: ProcessLaunchPlanOptions,
+): ProcessLaunchPlan {
+  const executionEnvironment = options.executionEnvironment;
+  if (!executionEnvironment || executionEnvironment.kind !== "wsl") {
+    throw new Error("WSL launch planning requires a WSL execution environment.");
+  }
+
+  const env = resolveEffectiveEnvironment(options.env);
+  const wslExecutable = resolveWindowsExecutableCommand("wsl.exe", env, options.cwd);
+  const { distroName, cwd } = resolveWslWorkingDirectory({
+    cwd: options.cwd,
+    executionEnvironment,
+  });
+
+  return {
+    command: wslExecutable,
+    args: [
+      ...(distroName ? ["--distribution", distroName] : []),
+      ...(cwd ? ["--cd", cwd] : []),
+      "--exec",
+      resolveWslCommand(command),
+      ...args,
+    ],
+    shell: false,
+    cwd: undefined,
+  };
+}
+
 function assertSupportedExecutionEnvironment(options: ProcessLaunchPlanOptions): void {
   const executionEnvironment = options.executionEnvironment;
   if (!executionEnvironment || executionEnvironment.kind === "host") {
@@ -206,8 +260,6 @@ function assertSupportedExecutionEnvironment(options: ProcessLaunchPlanOptions):
   if (executionEnvironment.kind === "wsl" && hostOsFamily !== "windows") {
     throw new Error("WSL execution requires a Windows host.");
   }
-
-  throw new Error("WSL execution launch planning is not implemented yet.");
 }
 
 export function resolveProcessLaunchPlan(
@@ -222,16 +274,23 @@ export function resolveProcessLaunchPlan(
       command,
       args: [...args],
       shell: options.shell,
+      cwd: resolveHostSpawnCwd(options),
     };
   }
 
   const platform = options.platform ?? process.platform;
+  const executionEnvironment = options.executionEnvironment;
+
+  if (executionEnvironment?.kind === "wsl") {
+    return resolveWslProcessLaunchPlan(command, args, options);
+  }
 
   if (platform !== "win32") {
     return {
       command,
       args: [...args],
       shell: false,
+      cwd: resolveHostSpawnCwd(options),
     };
   }
 
@@ -242,6 +301,7 @@ export function resolveProcessLaunchPlan(
       command,
       args: [...args],
       shell: false,
+      cwd: resolveHostSpawnCwd(options),
     };
   }
 
@@ -252,6 +312,7 @@ export function resolveProcessLaunchPlan(
       command: resolved.path,
       args: [...args],
       shell: resolveWindowsCommandShell(env),
+      cwd: resolveHostSpawnCwd(options),
     };
   }
 
@@ -259,6 +320,7 @@ export function resolveProcessLaunchPlan(
     command: resolved.path,
     args: [...args],
     shell: false,
+    cwd: resolveHostSpawnCwd(options),
   };
 }
 
@@ -282,6 +344,7 @@ export function makeRuntimeCommand(
   });
   return ChildProcess.make(launchPlan.command, launchPlan.args, {
     ...childProcessOptions,
+    cwd: launchPlan.cwd,
     shell: launchPlan.shell,
   });
 }
@@ -349,7 +412,7 @@ export async function runProcess(
       executionEnvironment: options.executionEnvironment,
     });
     const child = spawn(launchPlan.command, launchPlan.args, {
-      cwd: options.cwd,
+      cwd: launchPlan.cwd,
       env: options.env,
       stdio: "pipe",
       shell: launchPlan.shell,
