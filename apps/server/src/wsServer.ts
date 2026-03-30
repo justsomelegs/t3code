@@ -78,6 +78,7 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
+import { detectServerRuntimeEnvironment } from "./runtimeEnvironment";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -249,6 +250,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     autoBootstrapProjectFromCwd,
   } = serverConfig;
   const availableEditors = resolveAvailableEditors();
+  const runtimeEnvironment = detectServerRuntimeEnvironment();
 
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
@@ -887,6 +889,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           issues: keybindingsConfig.issues,
           providers: providerStatuses,
           availableEditors,
+          runtimeEnvironment,
         };
 
       case WS_METHODS.serverUpsertKeybinding: {

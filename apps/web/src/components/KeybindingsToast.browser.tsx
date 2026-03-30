@@ -53,6 +53,13 @@ function createBaseServerConfig(): ServerConfig {
       },
     ],
     availableEditors: [],
+    runtimeEnvironment: {
+      platform: "linux",
+      pathStyle: "posix",
+      isWsl: false,
+      windowsInteropMode: null,
+      wslDistroName: null,
+    },
   };
 }
 
