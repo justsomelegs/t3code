@@ -25,6 +25,7 @@ export default Effect.gen(function* () {
       model TEXT NOT NULL,
       branch TEXT,
       worktree_path TEXT,
+      execution_environment_preference_json TEXT NOT NULL DEFAULT '{"kind":"auto"}',
       latest_turn_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,

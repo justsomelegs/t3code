@@ -12,6 +12,7 @@ import type { Duplex } from "node:stream";
 import Mime from "@effect/platform-node/Mime";
 import {
   CommandId,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ClientOrchestrationCommand,
   type OrchestrationCommand,
@@ -678,6 +679,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           modelSelection: bootstrapProjectDefaultModelSelection,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
+          executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
           branch: null,
           worktreePath: null,
           createdAt,

@@ -1,6 +1,10 @@
 import { Option, Schema, SchemaIssue, Struct } from "effect";
 import { ClaudeModelOptions, CodexModelOptions } from "./model";
 import {
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+  ServerExecutionEnvironmentPreference,
+} from "./runtimeEnvironment";
+import {
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
@@ -292,6 +296,9 @@ export const OrchestrationThread = Schema.Struct({
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
+  executionEnvironmentPreference: ServerExecutionEnvironmentPreference.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE),
+  ),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
@@ -351,6 +358,9 @@ const ThreadCreateCommand = Schema.Struct({
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
+  executionEnvironmentPreference: ServerExecutionEnvironmentPreference.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE),
+  ),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
@@ -380,6 +390,14 @@ const ThreadRuntimeModeSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   runtimeMode: RuntimeMode,
+  createdAt: IsoDateTime,
+});
+
+const ThreadExecutionEnvironmentPreferenceSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.execution-environment-preference.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  executionEnvironmentPreference: ServerExecutionEnvironmentPreference,
   createdAt: IsoDateTime,
 });
 
@@ -480,6 +498,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadDeleteCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
+  ThreadExecutionEnvironmentPreferenceSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
@@ -499,6 +518,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadDeleteCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
+  ThreadExecutionEnvironmentPreferenceSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
@@ -599,6 +619,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.deleted",
   "thread.meta-updated",
   "thread.runtime-mode-set",
+  "thread.execution-environment-preference-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
   "thread.turn-start-requested",
@@ -649,6 +670,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
+  executionEnvironmentPreference: ServerExecutionEnvironmentPreference.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE),
+  ),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
@@ -675,6 +699,14 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
 export const ThreadRuntimeModeSetPayload = Schema.Struct({
   threadId: ThreadId,
   runtimeMode: RuntimeMode,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadExecutionEnvironmentPreferenceSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  executionEnvironmentPreference: ServerExecutionEnvironmentPreference.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE),
+  ),
   updatedAt: IsoDateTime,
 });
 
@@ -830,6 +862,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.runtime-mode-set"),
     payload: ThreadRuntimeModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.execution-environment-preference-set"),
+    payload: ThreadExecutionEnvironmentPreferenceSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

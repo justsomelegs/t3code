@@ -1,5 +1,6 @@
 import {
   CheckpointRef,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   ProjectId,
   ThreadId,
@@ -49,6 +50,7 @@ function makeSnapshot(input: {
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "full-access",
+        executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         branch: null,
         worktreePath: input.worktreePath,
         latestTurn: {

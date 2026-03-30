@@ -3,6 +3,7 @@ import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ProviderKind } from "./orchestration";
+import { ServerExecutionEnvironment, ServerHostRuntime } from "./runtimeEnvironment";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -44,32 +45,6 @@ export const ServerProviderStatus = Schema.Struct({
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;
 
 const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
-
-export const ServerHostOsFamily = Schema.Literals(["windows", "linux", "macos", "other"]);
-export type ServerHostOsFamily = typeof ServerHostOsFamily.Type;
-
-export const ServerPathStyle = Schema.Literals(["windows", "posix"]);
-export type ServerPathStyle = typeof ServerPathStyle.Type;
-
-export const ServerHostRuntime = Schema.Struct({
-  rawPlatform: TrimmedNonEmptyString,
-  osFamily: ServerHostOsFamily,
-  pathStyle: ServerPathStyle,
-  isWsl: Schema.Boolean,
-  wslDistroName: Schema.NullOr(TrimmedNonEmptyString),
-});
-export type ServerHostRuntime = typeof ServerHostRuntime.Type;
-
-export const ServerExecutionEnvironment = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("host"),
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("wsl"),
-    distroName: Schema.NullOr(TrimmedNonEmptyString),
-  }),
-]);
-export type ServerExecutionEnvironment = typeof ServerExecutionEnvironment.Type;
 
 export const ServerConfig = Schema.Struct({
   cwd: TrimmedNonEmptyString,

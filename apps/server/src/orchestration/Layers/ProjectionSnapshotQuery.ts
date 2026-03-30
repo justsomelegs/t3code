@@ -18,6 +18,7 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   ModelSelection,
+  ServerExecutionEnvironmentPreference,
 } from "@t3tools/contracts";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -60,6 +61,7 @@ const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    executionEnvironmentPreference: Schema.fromJsonString(ServerExecutionEnvironmentPreference),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -168,6 +170,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
+          execution_environment_preference_json AS "executionEnvironmentPreference",
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
@@ -554,6 +557,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             title: row.title,
             modelSelection: row.modelSelection,
             runtimeMode: row.runtimeMode,
+            executionEnvironmentPreference: row.executionEnvironmentPreference,
             interactionMode: row.interactionMode,
             branch: row.branch,
             worktreePath: row.worktreePath,

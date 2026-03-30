@@ -160,6 +160,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
+          executionEnvironmentPreference: command.executionEnvironmentPreference,
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
@@ -237,6 +238,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           runtimeMode: command.runtimeMode,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.execution-environment-preference.set": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.execution-environment-preference-set",
+        payload: {
+          threadId: command.threadId,
+          executionEnvironmentPreference: command.executionEnvironmentPreference,
           updatedAt: occurredAt,
         },
       };

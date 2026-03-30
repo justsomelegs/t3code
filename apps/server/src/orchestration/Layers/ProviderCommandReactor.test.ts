@@ -6,6 +6,7 @@ import type { ModelSelection, ProviderRuntimeEvent, ProviderSession } from "@t3t
 import {
   ApprovalRequestId,
   CommandId,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
@@ -246,6 +247,7 @@ describe("ProviderCommandReactor", () => {
         modelSelection: modelSelection,
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
+        executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         branch: null,
         worktreePath: null,
         createdAt: now,

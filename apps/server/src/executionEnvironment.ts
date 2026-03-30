@@ -1,23 +1,15 @@
-import type { ServerExecutionEnvironment, ServerHostRuntime } from "@t3tools/contracts";
+import type {
+  ServerExecutionEnvironment,
+  ServerExecutionEnvironmentPreference,
+  ServerHostRuntime,
+} from "@t3tools/contracts";
 
 import { isPosixPath, parseWslUncPath } from "./pathInterop";
-
-export type ExecutionEnvironmentPreference =
-  | {
-      readonly kind: "auto";
-    }
-  | {
-      readonly kind: "host";
-    }
-  | {
-      readonly kind: "wsl";
-      readonly distroName: string | null;
-    };
 
 interface ResolveExecutionEnvironmentOptions {
   readonly hostRuntime: ServerHostRuntime;
   readonly availableExecutionEnvironments: ReadonlyArray<ServerExecutionEnvironment>;
-  readonly preference?: ExecutionEnvironmentPreference | undefined;
+  readonly preference?: ServerExecutionEnvironmentPreference | undefined;
 }
 
 interface InferExecutionEnvironmentFromCwdOptions {

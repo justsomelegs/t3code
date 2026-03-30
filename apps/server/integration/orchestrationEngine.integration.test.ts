@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   ApprovalRequestId,
   CommandId,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_MODEL_BY_PROVIDER,
   EventId,
@@ -135,6 +136,7 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       runtimeMode: "approval-required",
+      executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
       branch: null,
       worktreePath: harness.workspaceDir,
       createdAt,
@@ -284,6 +286,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
+          executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
           branch: null,
           worktreePath: harness.workspaceDir,
           createdAt,

@@ -11,11 +11,12 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection } from "@t3tools/contracts";
+import { ModelSelection, ServerExecutionEnvironmentPreference } from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    executionEnvironmentPreference: Schema.fromJsonString(ServerExecutionEnvironmentPreference),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
@@ -33,6 +34,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           title,
           model_selection_json,
           runtime_mode,
+          execution_environment_preference_json,
           interaction_mode,
           branch,
           worktree_path,
@@ -47,6 +49,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.title},
           ${JSON.stringify(row.modelSelection)},
           ${row.runtimeMode},
+          ${JSON.stringify(row.executionEnvironmentPreference)},
           ${row.interactionMode},
           ${row.branch},
           ${row.worktreePath},
@@ -61,6 +64,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           title = excluded.title,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
+          execution_environment_preference_json = excluded.execution_environment_preference_json,
           interaction_mode = excluded.interaction_mode,
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
@@ -82,6 +86,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
+          execution_environment_preference_json AS "executionEnvironmentPreference",
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
@@ -105,6 +110,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
+          execution_environment_preference_json AS "executionEnvironmentPreference",
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",

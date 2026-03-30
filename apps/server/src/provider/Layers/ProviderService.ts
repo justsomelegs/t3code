@@ -10,8 +10,10 @@
  * @module ProviderServiceLive
  */
 import {
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   ModelSelection,
   NonNegativeInt,
+  ServerExecutionEnvironmentPreference,
   ThreadId,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
@@ -92,6 +94,7 @@ function toRuntimePayloadFromSession(
   extra?: {
     readonly modelSelection?: unknown;
     readonly providerOptions?: unknown;
+    readonly executionEnvironmentPreference?: unknown;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
   },
@@ -103,6 +106,9 @@ function toRuntimePayloadFromSession(
     lastError: session.lastError ?? null,
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(extra?.providerOptions !== undefined ? { providerOptions: extra.providerOptions } : {}),
+    ...(extra?.executionEnvironmentPreference !== undefined
+      ? { executionEnvironmentPreference: extra.executionEnvironmentPreference }
+      : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
@@ -143,6 +149,19 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function readPersistedExecutionEnvironmentPreference(
+  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
+): ServerExecutionEnvironmentPreference | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw =
+    "executionEnvironmentPreference" in runtimePayload
+      ? runtimePayload.executionEnvironmentPreference
+      : undefined;
+  return Schema.is(ServerExecutionEnvironmentPreference)(raw) ? raw : undefined;
+}
+
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
   Effect.gen(function* () {
     const analytics = yield* Effect.service(AnalyticsService);
@@ -174,6 +193,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       extra?: {
         readonly modelSelection?: unknown;
         readonly providerOptions?: unknown;
+        readonly executionEnvironmentPreference?: unknown;
         readonly lastRuntimeEvent?: string;
         readonly lastRuntimeEventAt?: string;
       },
@@ -240,6 +260,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
         const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
         const persistedProviderOptions = readPersistedProviderOptions(input.binding.runtimePayload);
+        const persistedExecutionEnvironmentPreference = readPersistedExecutionEnvironmentPreference(
+          input.binding.runtimePayload,
+        );
 
         const resumed = yield* adapter.startSession({
           threadId: input.binding.threadId,
@@ -247,6 +270,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
           ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
           ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
+          ...(persistedExecutionEnvironmentPreference
+            ? { executionEnvironmentPreference: persistedExecutionEnvironmentPreference }
+            : {}),
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",
         });
@@ -330,6 +356,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         yield* upsertSessionBinding(session, threadId, {
           modelSelection: input.modelSelection,
           providerOptions: input.providerOptions,
+          executionEnvironmentPreference:
+            input.executionEnvironmentPreference ?? DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         });
         yield* analytics.record("provider.session.started", {
           provider: session.provider,

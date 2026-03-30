@@ -27,7 +27,10 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
-import { inferExecutionEnvironmentFromCwd } from "./executionEnvironment";
+import {
+  inferExecutionEnvironmentFromCwd,
+  resolveExecutionEnvironment,
+} from "./executionEnvironment";
 import { resolveProcessLaunchPlan } from "./processRunner";
 import {
   detectServerRuntimeEnvironment,
@@ -139,6 +142,7 @@ export interface CodexAppServerStartSessionInput {
   readonly serviceTier?: string;
   readonly resumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
+  readonly executionEnvironmentPreference?: ProviderSessionStartInput["executionEnvironmentPreference"];
   readonly runtimeMode: RuntimeMode;
 }
 
@@ -564,11 +568,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
       const { hostRuntime, availableExecutionEnvironments } = await this.getRuntimeEnvironment();
-      const executionEnvironment = inferExecutionEnvironmentFromCwd({
-        cwd: resolvedCwd,
-        hostRuntime,
-        availableExecutionEnvironments,
-      });
+      const executionEnvironment =
+        input.executionEnvironmentPreference !== undefined
+          ? resolveExecutionEnvironment({
+              hostRuntime,
+              availableExecutionEnvironments,
+              preference: input.executionEnvironmentPreference,
+            })
+          : inferExecutionEnvironmentFromCwd({
+              cwd: resolvedCwd,
+              hostRuntime,
+              availableExecutionEnvironments,
+            });
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,

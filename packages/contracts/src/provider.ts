@@ -23,6 +23,7 @@ import {
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration";
+import { ServerExecutionEnvironmentPreference } from "./runtimeEnvironment";
 
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
@@ -52,6 +53,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   provider: Schema.optional(ProviderKind),
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
+  executionEnvironmentPreference: Schema.optional(ServerExecutionEnvironmentPreference),
   resumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),

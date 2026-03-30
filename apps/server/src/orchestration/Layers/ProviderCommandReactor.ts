@@ -1,6 +1,7 @@
 import {
   type ChatAttachment,
   CommandId,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   EventId,
   type ModelSelection,
@@ -11,6 +12,7 @@ import {
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
+  type ServerExecutionEnvironmentPreference,
   type TurnId,
 } from "@t3tools/contracts";
 import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
@@ -32,6 +34,7 @@ type ProviderIntentEvent = Extract<
   {
     type:
       | "thread.runtime-mode-set"
+      | "thread.execution-environment-preference-set"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
@@ -153,6 +156,10 @@ const make = Effect.gen(function* () {
 
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
   const threadModelSelections = new Map<string, ModelSelection>();
+  const threadExecutionEnvironmentPreferences = new Map<
+    string,
+    ServerExecutionEnvironmentPreference
+  >();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -220,6 +227,7 @@ const make = Effect.gen(function* () {
     }
 
     const desiredRuntimeMode = thread.runtimeMode;
+    const desiredExecutionEnvironmentPreference = thread.executionEnvironmentPreference;
     const currentProvider: ProviderKind | undefined = Schema.is(ProviderKind)(
       thread.session?.providerName,
     )
@@ -261,6 +269,7 @@ const make = Effect.gen(function* () {
         ...(options?.providerOptions !== undefined
           ? { providerOptions: options.providerOptions }
           : {}),
+        executionEnvironmentPreference: desiredExecutionEnvironmentPreference,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
       });
@@ -302,12 +311,20 @@ const make = Effect.gen(function* () {
         currentProvider === "claudeAgent" &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+      const previousExecutionEnvironmentPreference =
+        threadExecutionEnvironmentPreferences.get(threadId) ??
+        DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE;
+      const shouldRestartForExecutionEnvironmentPreferenceChange = !Equal.equals(
+        previousExecutionEnvironmentPreference,
+        desiredExecutionEnvironmentPreference,
+      );
 
       if (
         !runtimeModeChanged &&
         !providerChanged &&
         !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartForModelSelectionChange &&
+        !shouldRestartForExecutionEnvironmentPreferenceChange
       ) {
         return existingSessionThreadId;
       }
@@ -323,11 +340,14 @@ const make = Effect.gen(function* () {
         desiredProvider: desiredModelSelection.provider,
         currentRuntimeMode: thread.session?.runtimeMode,
         desiredRuntimeMode: thread.runtimeMode,
+        currentExecutionEnvironmentPreference: previousExecutionEnvironmentPreference,
+        desiredExecutionEnvironmentPreference,
         runtimeModeChanged,
         providerChanged,
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        shouldRestartForExecutionEnvironmentPreferenceChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(
@@ -341,11 +361,13 @@ const make = Effect.gen(function* () {
         runtimeMode: restartedSession.runtimeMode,
       });
       yield* bindSessionToThread(restartedSession);
+      threadExecutionEnvironmentPreferences.set(threadId, desiredExecutionEnvironmentPreference);
       return restartedSession.threadId;
     }
 
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
+    threadExecutionEnvironmentPreferences.set(threadId, desiredExecutionEnvironmentPreference);
     return startedSession.threadId;
   });
 
@@ -696,6 +718,21 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+        case "thread.execution-environment-preference-set": {
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (!thread?.session || thread.session.status === "stopped") {
+            return;
+          }
+          const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
+          const cachedModelSelection = threadModelSelections.get(event.payload.threadId);
+          yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
+            ...(cachedProviderOptions !== undefined
+              ? { providerOptions: cachedProviderOptions }
+              : {}),
+            ...(cachedModelSelection !== undefined ? { modelSelection: cachedModelSelection } : {}),
+          });
+          return;
+        }
         case "thread.turn-start-requested":
           yield* processTurnStartRequested(event);
           return;
@@ -733,6 +770,7 @@ const make = Effect.gen(function* () {
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
       if (
         event.type !== "thread.runtime-mode-set" &&
+        event.type !== "thread.execution-environment-preference-set" &&
         event.type !== "thread.turn-start-requested" &&
         event.type !== "thread.turn-interrupt-requested" &&
         event.type !== "thread.approval-response-requested" &&

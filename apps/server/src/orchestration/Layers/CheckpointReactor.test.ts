@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import type { ProviderKind, ProviderRuntimeEvent, ProviderSession } from "@t3tools/contracts";
 import {
   CommandId,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
@@ -302,6 +303,7 @@ describe("CheckpointReactor", () => {
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
+        executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         branch: null,
         worktreePath: options?.threadWorktreePath ?? cwd,
         createdAt,
