@@ -3,19 +3,27 @@ import { describe, expect, it } from "vitest";
 import { detectServerRuntimeEnvironment } from "./runtimeEnvironment";
 
 describe("detectServerRuntimeEnvironment", () => {
-  it("detects native Windows hosts", () => {
+  it("detects native Windows hosts and advertised WSL distros", () => {
     expect(
       detectServerRuntimeEnvironment({
         platform: "win32",
         env: {},
         osRelease: "10.0.22631",
+        listWindowsWslDistros: () => ["Ubuntu-24.04", "Arch"],
       }),
     ).toEqual({
-      platform: "windows",
-      pathStyle: "windows",
-      isWsl: false,
-      windowsInteropMode: "windows-native",
-      wslDistroName: null,
+      hostRuntime: {
+        rawPlatform: "win32",
+        osFamily: "windows",
+        pathStyle: "windows",
+        isWsl: false,
+        wslDistroName: null,
+      },
+      availableExecutionEnvironments: [
+        { kind: "host" },
+        { kind: "wsl", distroName: "Ubuntu-24.04" },
+        { kind: "wsl", distroName: "Arch" },
+      ],
     });
   });
 
@@ -27,11 +35,14 @@ describe("detectServerRuntimeEnvironment", () => {
         osRelease: "6.8.0-generic",
       }),
     ).toEqual({
-      platform: "linux",
-      pathStyle: "posix",
-      isWsl: false,
-      windowsInteropMode: null,
-      wslDistroName: null,
+      hostRuntime: {
+        rawPlatform: "linux",
+        osFamily: "linux",
+        pathStyle: "posix",
+        isWsl: false,
+        wslDistroName: null,
+      },
+      availableExecutionEnvironments: [{ kind: "host" }],
     });
   });
 
@@ -45,11 +56,54 @@ describe("detectServerRuntimeEnvironment", () => {
         osRelease: "6.6.87.2-microsoft-standard-WSL2",
       }),
     ).toEqual({
-      platform: "linux",
-      pathStyle: "posix",
-      isWsl: true,
-      windowsInteropMode: "wsl-hosted",
-      wslDistroName: "Ubuntu-24.04",
+      hostRuntime: {
+        rawPlatform: "linux",
+        osFamily: "linux",
+        pathStyle: "posix",
+        isWsl: true,
+        wslDistroName: "Ubuntu-24.04",
+      },
+      availableExecutionEnvironments: [{ kind: "host" }],
+    });
+  });
+
+  it("detects WSL hosts from WSL_INTEROP without distro name", () => {
+    expect(
+      detectServerRuntimeEnvironment({
+        platform: "linux",
+        env: {
+          WSL_INTEROP: "/run/WSL/1_interop",
+        },
+        osRelease: "6.8.0-generic",
+      }),
+    ).toEqual({
+      hostRuntime: {
+        rawPlatform: "linux",
+        osFamily: "linux",
+        pathStyle: "posix",
+        isWsl: true,
+        wslDistroName: null,
+      },
+      availableExecutionEnvironments: [{ kind: "host" }],
+    });
+  });
+
+  it("detects WSL hosts from kernel release metadata alone", () => {
+    expect(
+      detectServerRuntimeEnvironment({
+        platform: "linux",
+        env: {},
+        osRelease: "6.6.87.2-microsoft-standard-WSL2",
+      }),
+    ).toEqual({
+      hostRuntime: {
+        rawPlatform: "linux",
+        osFamily: "linux",
+        pathStyle: "posix",
+        isWsl: true,
+        wslDistroName: null,
+      },
+      availableExecutionEnvironments: [{ kind: "host" }],
     });
   });
 
@@ -64,11 +118,33 @@ describe("detectServerRuntimeEnvironment", () => {
         osRelease: "24.5.0",
       }),
     ).toEqual({
-      platform: "macos",
-      pathStyle: "posix",
-      isWsl: false,
-      windowsInteropMode: null,
-      wslDistroName: null,
+      hostRuntime: {
+        rawPlatform: "darwin",
+        osFamily: "macos",
+        pathStyle: "posix",
+        isWsl: false,
+        wslDistroName: null,
+      },
+      availableExecutionEnvironments: [{ kind: "host" }],
+    });
+  });
+
+  it("normalizes unsupported platforms to other instead of linux", () => {
+    expect(
+      detectServerRuntimeEnvironment({
+        platform: "freebsd",
+        env: {},
+        osRelease: "14.2-RELEASE",
+      }),
+    ).toEqual({
+      hostRuntime: {
+        rawPlatform: "freebsd",
+        osFamily: "other",
+        pathStyle: "posix",
+        isWsl: false,
+        wslDistroName: null,
+      },
+      availableExecutionEnvironments: [{ kind: "host" }],
     });
   });
 });

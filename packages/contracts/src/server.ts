@@ -45,23 +45,31 @@ export type ServerProviderStatus = typeof ServerProviderStatus.Type;
 
 const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
 
-export const ServerRuntimePlatform = Schema.Literals(["windows", "linux", "macos"]);
-export type ServerRuntimePlatform = typeof ServerRuntimePlatform.Type;
+export const ServerHostOsFamily = Schema.Literals(["windows", "linux", "macos", "other"]);
+export type ServerHostOsFamily = typeof ServerHostOsFamily.Type;
 
 export const ServerPathStyle = Schema.Literals(["windows", "posix"]);
 export type ServerPathStyle = typeof ServerPathStyle.Type;
 
-export const ServerWindowsInteropMode = Schema.Literals(["windows-native", "wsl-hosted"]);
-export type ServerWindowsInteropMode = typeof ServerWindowsInteropMode.Type;
-
-export const ServerRuntimeEnvironment = Schema.Struct({
-  platform: ServerRuntimePlatform,
+export const ServerHostRuntime = Schema.Struct({
+  rawPlatform: TrimmedNonEmptyString,
+  osFamily: ServerHostOsFamily,
   pathStyle: ServerPathStyle,
   isWsl: Schema.Boolean,
-  windowsInteropMode: Schema.NullOr(ServerWindowsInteropMode),
   wslDistroName: Schema.NullOr(TrimmedNonEmptyString),
 });
-export type ServerRuntimeEnvironment = typeof ServerRuntimeEnvironment.Type;
+export type ServerHostRuntime = typeof ServerHostRuntime.Type;
+
+export const ServerExecutionEnvironment = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("host"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("wsl"),
+    distroName: Schema.NullOr(TrimmedNonEmptyString),
+  }),
+]);
+export type ServerExecutionEnvironment = typeof ServerExecutionEnvironment.Type;
 
 export const ServerConfig = Schema.Struct({
   cwd: TrimmedNonEmptyString,
@@ -70,7 +78,8 @@ export const ServerConfig = Schema.Struct({
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,
   availableEditors: Schema.Array(EditorId),
-  runtimeEnvironment: ServerRuntimeEnvironment,
+  hostRuntime: ServerHostRuntime,
+  availableExecutionEnvironments: Schema.Array(ServerExecutionEnvironment),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

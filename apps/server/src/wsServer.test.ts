@@ -78,7 +78,7 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
 };
-const expectedRuntimeEnvironment = detectServerRuntimeEnvironment();
+const expectedServerRuntime = detectServerRuntimeEnvironment();
 
 class MockTerminalManager implements TerminalManagerShape {
   private readonly sessions = new Map<string, TerminalSessionSnapshot>();
@@ -860,7 +860,8 @@ describe("WebSocket Server", () => {
       issues: [],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
-      runtimeEnvironment: expectedRuntimeEnvironment,
+      hostRuntime: expectedServerRuntime.hostRuntime,
+      availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
   });
@@ -886,7 +887,8 @@ describe("WebSocket Server", () => {
       issues: [],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
-      runtimeEnvironment: expectedRuntimeEnvironment,
+      hostRuntime: expectedServerRuntime.hostRuntime,
+      availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
 
@@ -923,7 +925,8 @@ describe("WebSocket Server", () => {
       ],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
-      runtimeEnvironment: expectedRuntimeEnvironment,
+      hostRuntime: expectedServerRuntime.hostRuntime,
+      availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
     expect(fs.readFileSync(keybindingsPath, "utf8")).toBe("{ not-json");
@@ -959,7 +962,8 @@ describe("WebSocket Server", () => {
       issues: Array<{ kind: string; index?: number; message: string }>;
       providers: ReadonlyArray<ServerProviderStatus>;
       availableEditors: unknown;
-      runtimeEnvironment: unknown;
+      hostRuntime: unknown;
+      availableExecutionEnvironments: unknown;
     };
     expect(result.cwd).toBe("/my/workspace");
     expect(result.keybindingsConfigPath).toBe(keybindingsPath);
@@ -979,7 +983,10 @@ describe("WebSocket Server", () => {
     expect(result.keybindings.some((entry) => entry.command === "terminal.toggle")).toBe(true);
     expect(result.keybindings.some((entry) => entry.command === "terminal.new")).toBe(true);
     expect(result.providers).toEqual(defaultProviderStatuses);
-    expect(result.runtimeEnvironment).toEqual(expectedRuntimeEnvironment);
+    expect(result.hostRuntime).toEqual(expectedServerRuntime.hostRuntime);
+    expect(result.availableExecutionEnvironments).toEqual(
+      expectedServerRuntime.availableExecutionEnvironments,
+    );
     expectAvailableEditors(result.availableEditors);
   });
 
@@ -1076,7 +1083,8 @@ describe("WebSocket Server", () => {
       issues: [],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
-      runtimeEnvironment: expectedRuntimeEnvironment,
+      hostRuntime: expectedServerRuntime.hostRuntime,
+      availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
   });
@@ -1125,7 +1133,8 @@ describe("WebSocket Server", () => {
       issues: [],
       providers: defaultProviderStatuses,
       availableEditors: expect.any(Array),
-      runtimeEnvironment: expectedRuntimeEnvironment,
+      hostRuntime: expectedServerRuntime.hostRuntime,
+      availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
     });
     expectAvailableEditors(
       (configResponse.result as { availableEditors: unknown }).availableEditors,

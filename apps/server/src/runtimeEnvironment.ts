@@ -1,21 +1,34 @@
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 
-import type { ServerRuntimeEnvironment, ServerRuntimePlatform } from "@t3tools/contracts";
+import type {
+  ServerExecutionEnvironment,
+  ServerHostOsFamily,
+  ServerHostRuntime,
+} from "@t3tools/contracts";
 
 interface DetectServerRuntimeEnvironmentOptions {
   readonly platform?: NodeJS.Platform;
   readonly env?: NodeJS.ProcessEnv;
   readonly osRelease?: string;
+  readonly listWindowsWslDistros?: () => ReadonlyArray<string>;
 }
 
-function normalizePlatform(platform: NodeJS.Platform): ServerRuntimePlatform {
+interface ServerRuntimeEnvironmentDetails {
+  readonly hostRuntime: ServerHostRuntime;
+  readonly availableExecutionEnvironments: ReadonlyArray<ServerExecutionEnvironment>;
+}
+
+function normalizeOsFamily(platform: NodeJS.Platform): ServerHostOsFamily {
   switch (platform) {
     case "win32":
       return "windows";
     case "darwin":
       return "macos";
-    default:
+    case "linux":
       return "linux";
+    default:
+      return "other";
   }
 }
 
@@ -25,11 +38,11 @@ function readEnvValue(env: NodeJS.ProcessEnv, key: string): string | null {
 }
 
 function isWslHost(params: {
-  readonly normalizedPlatform: ServerRuntimePlatform;
+  readonly osFamily: ServerHostOsFamily;
   readonly env: NodeJS.ProcessEnv;
   readonly osRelease: string;
 }): boolean {
-  if (params.normalizedPlatform !== "linux") {
+  if (params.osFamily !== "linux") {
     return false;
   }
 
@@ -40,20 +53,73 @@ function isWslHost(params: {
   );
 }
 
+function parseWslDistroList(stdout: string): ReadonlyArray<string> {
+  const distros = new Set<string>();
+  for (const line of stdout.split(/\r?\n/u)) {
+    const normalized = line
+      .replaceAll("\u0000", "")
+      .replace(/^\uFEFF/u, "")
+      .trim();
+    if (normalized.length === 0) continue;
+    distros.add(normalized);
+  }
+  return Array.from(distros);
+}
+
+function listInstalledWindowsWslDistros(): ReadonlyArray<string> {
+  const result = spawnSync("wsl.exe", ["-l", "-q"], {
+    encoding: "utf8",
+    timeout: 1_500,
+    windowsHide: true,
+  });
+
+  if (result.error || result.status !== 0 || typeof result.stdout !== "string") {
+    return [];
+  }
+
+  return parseWslDistroList(result.stdout);
+}
+
+function resolveAvailableExecutionEnvironments(params: {
+  readonly hostRuntime: ServerHostRuntime;
+  readonly listWindowsWslDistros: () => ReadonlyArray<string>;
+}): ReadonlyArray<ServerExecutionEnvironment> {
+  const environments: ServerExecutionEnvironment[] = [{ kind: "host" }];
+  if (params.hostRuntime.osFamily !== "windows") {
+    return environments;
+  }
+
+  for (const distroName of params.listWindowsWslDistros()) {
+    environments.push({
+      kind: "wsl",
+      distroName,
+    });
+  }
+
+  return environments;
+}
+
 export function detectServerRuntimeEnvironment(
   options: DetectServerRuntimeEnvironmentOptions = {},
-): ServerRuntimeEnvironment {
+): ServerRuntimeEnvironmentDetails {
+  const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  const normalizedPlatform = normalizePlatform(options.platform ?? process.platform);
   const osRelease = options.osRelease ?? os.release();
-  const isWsl = isWslHost({ normalizedPlatform, env, osRelease });
+  const osFamily = normalizeOsFamily(platform);
+  const isWsl = isWslHost({ osFamily, env, osRelease });
+  const hostRuntime: ServerHostRuntime = {
+    rawPlatform: platform,
+    osFamily,
+    pathStyle: platform === "win32" ? "windows" : "posix",
+    isWsl,
+    wslDistroName: isWsl ? readEnvValue(env, "WSL_DISTRO_NAME") : null,
+  };
 
   return {
-    platform: normalizedPlatform,
-    pathStyle: normalizedPlatform === "windows" ? "windows" : "posix",
-    isWsl,
-    windowsInteropMode:
-      normalizedPlatform === "windows" ? "windows-native" : isWsl ? "wsl-hosted" : null,
-    wslDistroName: isWsl ? readEnvValue(env, "WSL_DISTRO_NAME") : null,
+    hostRuntime,
+    availableExecutionEnvironments: resolveAvailableExecutionEnvironments({
+      hostRuntime,
+      listWindowsWslDistros: options.listWindowsWslDistros ?? listInstalledWindowsWslDistros,
+    }),
   };
 }
