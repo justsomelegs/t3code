@@ -353,6 +353,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     id: ProjectId.makeUnsafe("project-1"),
     name: "Project",
     cwd: "/tmp/project",
+    defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
     defaultModelSelection: {
       provider: "codex",
       model: "gpt-5.4",

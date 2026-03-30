@@ -83,6 +83,7 @@ export interface Project {
   name: string;
   cwd: string;
   defaultModelSelection: ModelSelection | null;
+  defaultExecutionEnvironmentPreference: ServerExecutionEnvironmentPreferenceType;
   expanded: boolean;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;

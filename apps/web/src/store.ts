@@ -143,6 +143,7 @@ function mapProjectsFromReadModel(
               ),
             }
           : null),
+      defaultExecutionEnvironmentPreference: project.defaultExecutionEnvironmentPreference,
       expanded:
         existing?.expanded ??
         (persistedExpandedProjectCwds.size > 0

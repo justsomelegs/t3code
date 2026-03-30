@@ -94,6 +94,10 @@ export function useHandleNewThread() {
 
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
+      const projectDefaultExecutionEnvironmentPreference =
+        projects.find((project) => project.id === projectId)
+          ?.defaultExecutionEnvironmentPreference ??
+        DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE;
       return (async () => {
         setProjectDraftThreadId(projectId, threadId, {
           createdAt,
@@ -101,7 +105,7 @@ export function useHandleNewThread() {
           worktreePath: options?.worktreePath ?? null,
           envMode: options?.envMode ?? "local",
           runtimeMode: DEFAULT_RUNTIME_MODE,
-          executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+          executionEnvironmentPreference: projectDefaultExecutionEnvironmentPreference,
         });
         applyStickyState(threadId);
 
@@ -111,7 +115,7 @@ export function useHandleNewThread() {
         });
       })();
     },
-    [navigate, routeThreadId],
+    [navigate, projects, routeThreadId],
   );
 
   return {

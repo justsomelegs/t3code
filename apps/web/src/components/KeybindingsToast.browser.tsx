@@ -77,6 +77,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
           provider: "codex",
           model: "gpt-5",
         },
+        defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         scripts: [],
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,

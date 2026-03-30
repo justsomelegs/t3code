@@ -523,12 +523,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  const activeProject = projects.find((p) => p.id === activeThread?.projectId);
+  const projectExecutionEnvironmentPreference =
+    activeProject?.defaultExecutionEnvironmentPreference ??
+    DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE;
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const executionEnvironmentPreference =
     composerDraft.executionEnvironmentPreference ??
     activeThread?.executionEnvironmentPreference ??
-    DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE;
+    projectExecutionEnvironmentPreference;
   const interactionMode =
     composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isServerThread = serverThread !== undefined;
@@ -542,7 +546,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [activeThread?.activities],
   );
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
-  const activeProject = projects.find((p) => p.id === activeThread?.projectId);
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -1216,7 +1219,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           kind: "wsl",
           distroName: environment.distroName,
         }),
-        label: environment.distroName ?? "WSL",
+        label: environment.distroName ? `WSL: ${environment.distroName}` : "WSL",
       });
     }
     return options;
@@ -1231,6 +1234,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
     );
     return matchedOption?.label ?? "Auto";
   }, [executionEnvironmentControlOptions, executionEnvironmentControlValue]);
+  const projectExecutionEnvironmentControlValue = useMemo(
+    () => executionEnvironmentPreferenceValue(projectExecutionEnvironmentPreference),
+    [projectExecutionEnvironmentPreference],
+  );
+  const projectExecutionEnvironmentControlLabel = useMemo(() => {
+    const matchedOption = executionEnvironmentControlOptions.find(
+      (option) => option.value === projectExecutionEnvironmentControlValue,
+    );
+    return matchedOption?.label ?? "Auto";
+  }, [executionEnvironmentControlOptions, projectExecutionEnvironmentControlValue]);
+  const isProjectExecutionEnvironmentDefault = useMemo(
+    () => Equal.equals(projectExecutionEnvironmentPreference, executionEnvironmentPreference),
+    [executionEnvironmentPreference, projectExecutionEnvironmentPreference],
+  );
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = branchesQuery.data?.isRepo ?? true;
   const terminalToggleShortcutLabel = useMemo(
@@ -1719,6 +1736,27 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [handleExecutionEnvironmentPreferenceChange],
   );
+  const handleSetProjectExecutionEnvironmentPreferenceDefault = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api || !activeProject) {
+      return;
+    }
+    if (Equal.equals(projectExecutionEnvironmentPreference, executionEnvironmentPreference)) {
+      return;
+    }
+    await api.orchestration.dispatchCommand({
+      type: "project.meta.update",
+      commandId: newCommandId(),
+      projectId: activeProject.id,
+      defaultExecutionEnvironmentPreference: executionEnvironmentPreference,
+    });
+    scheduleComposerFocus();
+  }, [
+    activeProject,
+    executionEnvironmentPreference,
+    projectExecutionEnvironmentPreference,
+    scheduleComposerFocus,
+  ]);
   const togglePlanSidebar = useCallback(() => {
     setPlanSidebarOpen((open) => {
       if (open) {
@@ -4074,6 +4112,22 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                         </MenuRadioItem>
                                       ))}
                                     </MenuRadioGroup>
+                                    {activeProject ? (
+                                      <>
+                                        <Separator className="my-1" />
+                                        <div className="px-2 py-1.5 text-muted-foreground text-xs">
+                                          Project default: {projectExecutionEnvironmentControlLabel}
+                                        </div>
+                                        <MenuItem
+                                          disabled={isProjectExecutionEnvironmentDefault}
+                                          onClick={() => {
+                                            void handleSetProjectExecutionEnvironmentPreferenceDefault();
+                                          }}
+                                        >
+                                          Set current selection as project default
+                                        </MenuItem>
+                                      </>
+                                    ) : null}
                                   </MenuPopup>
                                 </Menu>
                               </>

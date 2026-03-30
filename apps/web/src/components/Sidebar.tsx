@@ -29,6 +29,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
   ProjectId,
@@ -544,6 +545,7 @@ export default function Sidebar() {
             provider: "codex",
             model: DEFAULT_MODEL_BY_PROVIDER.codex,
           },
+          defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
           createdAt,
         });
         await handleNewThread(projectId, {

@@ -1,6 +1,7 @@
 import {
   CommandId,
   type ContextMenuItem,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   EventId,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -270,6 +271,7 @@ describe("wsNativeApi", () => {
         title: "Project",
         workspaceRoot: "/tmp/workspace",
         defaultModelSelection: null,
+        defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         scripts: [],
         createdAt: "2026-02-24T00:00:00.000Z",
         updatedAt: "2026-02-24T00:00:00.000Z",
@@ -315,6 +317,7 @@ describe("wsNativeApi", () => {
         provider: "codex",
         model: "gpt-5-codex",
       },
+      defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
       createdAt: "2026-02-24T00:00:00.000Z",
     } as const;
     await api.orchestration.dispatchCommand(command);
