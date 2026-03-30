@@ -48,6 +48,9 @@ const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    defaultExecutionEnvironmentPreference: Schema.fromJsonString(
+      ServerExecutionEnvironmentPreference,
+    ),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
   }),
 );
@@ -150,6 +153,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
+          default_execution_environment_preference_json AS "defaultExecutionEnvironmentPreference",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -545,6 +549,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             title: row.title,
             workspaceRoot: row.workspaceRoot,
             defaultModelSelection: row.defaultModelSelection,
+            defaultExecutionEnvironmentPreference: row.defaultExecutionEnvironmentPreference,
             scripts: row.scripts,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,

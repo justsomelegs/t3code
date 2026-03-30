@@ -121,6 +121,7 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
         provider,
         model: defaultModel,
       },
+      defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
       createdAt,
     });
 
@@ -271,6 +272,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
             provider: "codex",
             model: "gpt-5.3-codex",
           },
+          defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
           createdAt,
         });
 

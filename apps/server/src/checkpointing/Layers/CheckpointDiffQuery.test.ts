@@ -33,6 +33,7 @@ function makeSnapshot(input: {
         title: "Project",
         workspaceRoot: input.workspaceRoot,
         defaultModelSelection: null,
+        defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         scripts: [],
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",

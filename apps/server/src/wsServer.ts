@@ -638,6 +638,8 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       );
       let bootstrapProjectId: ProjectId;
       let bootstrapProjectDefaultModelSelection;
+      let bootstrapProjectExecutionEnvironmentPreference =
+        DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE;
 
       if (!existingProject) {
         const createdAt = new Date().toISOString();
@@ -654,6 +656,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           title: bootstrapProjectTitle,
           workspaceRoot: cwd,
           defaultModelSelection: bootstrapProjectDefaultModelSelection,
+          defaultExecutionEnvironmentPreference: bootstrapProjectExecutionEnvironmentPreference,
           createdAt,
         });
       } else {
@@ -662,6 +665,8 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           provider: "codex" as const,
           model: "gpt-5-codex",
         };
+        bootstrapProjectExecutionEnvironmentPreference =
+          existingProject.defaultExecutionEnvironmentPreference;
       }
 
       const existingThread = snapshot.threads.find(
@@ -679,7 +684,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           modelSelection: bootstrapProjectDefaultModelSelection,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
-          executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+          executionEnvironmentPreference: bootstrapProjectExecutionEnvironmentPreference,
           branch: null,
           worktreePath: null,
           createdAt,

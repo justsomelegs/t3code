@@ -18,6 +18,7 @@ import {
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
 } from "./orchestration";
+import { DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE } from "./runtimeEnvironment";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
 const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
@@ -95,6 +96,10 @@ it.effect("trims branded ids and command string fields at decode boundaries", ()
       provider: "codex",
       model: "gpt-5.2",
     });
+    assert.deepStrictEqual(
+      parsed.defaultExecutionEnvironmentPreference,
+      DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+    );
   }),
 );
 
@@ -113,6 +118,10 @@ it.effect("decodes historical project.created payloads with a default provider",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "codex");
+    assert.deepStrictEqual(
+      parsed.defaultExecutionEnvironmentPreference,
+      DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+    );
   }),
 );
 
@@ -127,6 +136,23 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "claudeAgent");
+  }),
+);
+
+it.effect("decodes explicit project execution environment preferences", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectMetaUpdatedPayload({
+      projectId: "project-1",
+      defaultExecutionEnvironmentPreference: {
+        kind: "wsl",
+        distroName: "Ubuntu-24.04",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.deepStrictEqual(parsed.defaultExecutionEnvironmentPreference, {
+      kind: "wsl",
+      distroName: "Ubuntu-24.04",
+    });
   }),
 );
 

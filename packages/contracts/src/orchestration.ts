@@ -166,6 +166,9 @@ export const OrchestrationProject = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   defaultModelSelection: Schema.NullOr(ModelSelection),
+  defaultExecutionEnvironmentPreference: ServerExecutionEnvironmentPreference.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE),
+  ),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -331,6 +334,9 @@ export const ProjectCreateCommand = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  defaultExecutionEnvironmentPreference: ServerExecutionEnvironmentPreference.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -341,6 +347,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  defaultExecutionEnvironmentPreference: Schema.optional(ServerExecutionEnvironmentPreference),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 
@@ -645,6 +652,9 @@ export const ProjectCreatedPayload = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   defaultModelSelection: Schema.NullOr(ModelSelection),
+  defaultExecutionEnvironmentPreference: ServerExecutionEnvironmentPreference.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE),
+  ),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -655,6 +665,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  defaultExecutionEnvironmentPreference: Schema.optional(ServerExecutionEnvironmentPreference),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
 });

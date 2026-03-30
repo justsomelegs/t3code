@@ -12,6 +12,7 @@ import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "./confi
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
 
 import {
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_TERMINAL_ID,
   EDITORS,
   EventId,
@@ -1254,6 +1255,7 @@ describe("WebSocket Server", () => {
         provider: "codex",
         model: "gpt-5-codex",
       },
+      defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
       createdAt,
     });
     expect(createProjectResponse.error).toBeUndefined();
@@ -1338,6 +1340,7 @@ describe("WebSocket Server", () => {
         provider: "codex",
         model: "gpt-5-codex",
       },
+      defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
       createdAt,
     });
     expect(createProjectResponse.error).toBeUndefined();

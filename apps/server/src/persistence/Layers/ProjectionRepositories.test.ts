@@ -35,6 +35,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           provider: "codex",
           model: "gpt-5.4",
         },
+        defaultExecutionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         scripts: [],
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",

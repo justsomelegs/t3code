@@ -6,7 +6,14 @@
  *
  * @module ProjectionProjectRepository
  */
-import { IsoDateTime, ModelSelection, ProjectId, ProjectScript } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+  IsoDateTime,
+  ModelSelection,
+  ProjectId,
+  ProjectScript,
+  ServerExecutionEnvironmentPreference,
+} from "@t3tools/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -17,6 +24,9 @@ export const ProjectionProject = Schema.Struct({
   title: Schema.String,
   workspaceRoot: Schema.String,
   defaultModelSelection: Schema.NullOr(ModelSelection),
+  defaultExecutionEnvironmentPreference: ServerExecutionEnvironmentPreference.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE),
+  ),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
