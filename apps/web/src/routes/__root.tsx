@@ -8,7 +8,6 @@ import {
 } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
-import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
@@ -136,6 +135,7 @@ function errorDetails(error: unknown): string {
 
 function EventRouter() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const applyOrchestrationEvents = useStore((store) => store.applyOrchestrationEvents);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
@@ -153,9 +153,48 @@ function EventRouter() {
     if (!api) return;
     let disposed = false;
     let latestSequence = 0;
-    let syncing = false;
-    let pending = false;
-    let needsProviderInvalidation = false;
+    let processing = Promise.resolve();
+
+    const reconcileTerminalStates = () => {
+      const draftThreadIds = Object.keys(
+        useComposerDraftStore.getState().draftThreadsByThreadId,
+      ) as ThreadId[];
+      const activeThreadIds = collectActiveTerminalThreadIds({
+        snapshotThreads: useStore.getState().threads.map((thread) => ({
+          id: thread.id,
+          deletedAt: null,
+        })),
+        draftThreadIds,
+      });
+      removeOrphanedTerminalStates(activeThreadIds);
+    };
+
+    const reconcileAfterEvents = (
+      events: ReadonlyArray<Parameters<typeof applyOrchestrationEvents>[0][number]>,
+    ) => {
+      const createdThreadIds = events.flatMap((event) =>
+        event.type === "thread.created" ? [event.payload.threadId] : [],
+      );
+      if (createdThreadIds.length > 0) {
+        clearPromotedDraftThreads(new Set(createdThreadIds));
+      }
+
+      if (
+        events.some((event) => event.type === "thread.created" || event.type === "thread.deleted")
+      ) {
+        reconcileTerminalStates();
+      }
+
+      if (
+        events.some(
+          (event) =>
+            event.type === "thread.turn-diff-completed" || event.type === "thread.reverted",
+        )
+      ) {
+        void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
+        void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
+      }
+    };
 
     const flushSnapshotSync = async (): Promise<void> => {
       const snapshot = await api.orchestration.getSnapshot();
@@ -163,62 +202,73 @@ function EventRouter() {
       latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
       syncServerReadModel(snapshot);
       clearPromotedDraftThreads(new Set(snapshot.threads.map((t) => t.id)));
-      const draftThreadIds = Object.keys(
-        useComposerDraftStore.getState().draftThreadsByThreadId,
-      ) as ThreadId[];
-      const activeThreadIds = collectActiveTerminalThreadIds({
-        snapshotThreads: snapshot.threads,
-        draftThreadIds,
-      });
-      removeOrphanedTerminalStates(activeThreadIds);
-      if (pending) {
-        pending = false;
-        await flushSnapshotSync();
+      reconcileTerminalStates();
+    };
+
+    const applyEvents = (
+      events: ReadonlyArray<Parameters<typeof applyOrchestrationEvents>[0][number]>,
+    ): boolean => {
+      const unseenEvents = events.filter((event) => event.sequence > latestSequence);
+      if (unseenEvents.length === 0) {
+        return true;
       }
+
+      const firstEvent = unseenEvents[0];
+      if (!firstEvent || firstEvent.sequence !== latestSequence + 1) {
+        return false;
+      }
+
+      for (let index = 1; index < unseenEvents.length; index += 1) {
+        const previousEvent = unseenEvents[index - 1];
+        const currentEvent = unseenEvents[index];
+        if (
+          !previousEvent ||
+          !currentEvent ||
+          currentEvent.sequence !== previousEvent.sequence + 1
+        ) {
+          return false;
+        }
+      }
+
+      latestSequence = unseenEvents.at(-1)?.sequence ?? latestSequence;
+      applyOrchestrationEvents(unseenEvents);
+      reconcileAfterEvents(unseenEvents);
+      return true;
     };
 
     const syncSnapshot = async () => {
-      if (syncing) {
-        pending = true;
-        return;
-      }
-      syncing = true;
-      pending = false;
       try {
         await flushSnapshotSync();
       } catch {
-        // Keep prior state and wait for next domain event to trigger a resync.
+        // Keep prior state and wait for the next welcome or replay attempt.
       }
-      syncing = false;
     };
 
-    const domainEventFlushThrottler = new Throttler(
-      () => {
-        if (needsProviderInvalidation) {
-          needsProviderInvalidation = false;
-          void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
-          // Invalidate workspace entry queries so the @-mention file picker
-          // reflects files created, deleted, or restored during this turn.
-          void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
-        }
-        void syncSnapshot();
-      },
-      {
-        wait: 100,
-        leading: false,
-        trailing: true,
-      },
-    );
+    const enqueue = (work: () => Promise<void>) => {
+      processing = processing.then(work, work).catch(() => undefined);
+    };
 
     const unsubDomainEvent = api.orchestration.onDomainEvent((event) => {
-      if (event.sequence <= latestSequence) {
-        return;
-      }
-      latestSequence = event.sequence;
-      if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
-        needsProviderInvalidation = true;
-      }
-      domainEventFlushThrottler.maybeExecute();
+      enqueue(async () => {
+        if (disposed || event.sequence <= latestSequence) {
+          return;
+        }
+        if (event.sequence === latestSequence + 1) {
+          applyEvents([event]);
+          return;
+        }
+        try {
+          const replayedEvents = await api.orchestration.replayEvents(latestSequence);
+          if (disposed) {
+            return;
+          }
+          if (!applyEvents(replayedEvents)) {
+            await syncSnapshot();
+          }
+        } catch {
+          await syncSnapshot();
+        }
+      });
     });
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const hasRunningSubprocess = terminalRunningSubprocessFromEvent(event);
@@ -236,7 +286,7 @@ function EventRouter() {
     const unsubWelcome = onServerWelcome((payload) => {
       // Migrate old localStorage settings to server on first connect
       migrateLocalSettingsToServer();
-      void (async () => {
+      enqueue(async () => {
         await syncSnapshot();
         if (disposed) {
           return;
@@ -259,7 +309,7 @@ function EventRouter() {
           replace: true,
         });
         handledBootstrapThreadIdRef.current = payload.bootstrapThreadId;
-      })().catch(() => undefined);
+      });
     });
     // onServerConfigUpdated replays the latest cached value synchronously
     // during subscribe. Skip the toast for that replay so effect re-runs
@@ -318,8 +368,6 @@ function EventRouter() {
     subscribed = true;
     return () => {
       disposed = true;
-      needsProviderInvalidation = false;
-      domainEventFlushThrottler.cancel();
       unsubDomainEvent();
       unsubTerminalEvent();
       unsubWelcome();
@@ -330,6 +378,7 @@ function EventRouter() {
     navigate,
     queryClient,
     removeOrphanedTerminalStates,
+    applyOrchestrationEvents,
     setProjectExpanded,
     syncServerReadModel,
   ]);

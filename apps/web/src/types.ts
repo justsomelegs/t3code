@@ -1,5 +1,6 @@
 import type {
   ModelSelection,
+  OrchestrationCheckpointStatus,
   OrchestrationLatestTurn,
   OrchestrationProposedPlanId,
   OrchestrationSessionStatus,
@@ -44,6 +45,7 @@ export interface ChatMessage {
   id: MessageId;
   role: "user" | "assistant" | "system";
   text: string;
+  turnId?: TurnId | null;
   attachments?: ChatAttachment[];
   createdAt: string;
   completedAt?: string | undefined;
@@ -70,7 +72,7 @@ export interface TurnDiffFileChange {
 export interface TurnDiffSummary {
   turnId: TurnId;
   completedAt: string;
-  status?: string | undefined;
+  status?: OrchestrationCheckpointStatus | undefined;
   files: TurnDiffFileChange[];
   checkpointRef?: CheckpointRef | undefined;
   assistantMessageId?: MessageId | undefined;
