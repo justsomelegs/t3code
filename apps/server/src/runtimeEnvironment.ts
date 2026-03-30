@@ -19,6 +19,9 @@ interface ServerRuntimeEnvironmentDetails {
   readonly availableExecutionEnvironments: ReadonlyArray<ServerExecutionEnvironment>;
 }
 
+let cachedWindowsWslDistros: ReadonlyArray<string> | null = null;
+let cachedServerRuntimeEnvironment: ServerRuntimeEnvironmentDetails | null = null;
+
 function normalizeOsFamily(platform: NodeJS.Platform): ServerHostOsFamily {
   switch (platform) {
     case "win32":
@@ -80,6 +83,15 @@ function listInstalledWindowsWslDistros(): ReadonlyArray<string> {
   return parseWslDistroList(result.stdout);
 }
 
+function listInstalledWindowsWslDistrosCached(): ReadonlyArray<string> {
+  if (cachedWindowsWslDistros !== null) {
+    return cachedWindowsWslDistros;
+  }
+
+  cachedWindowsWslDistros = listInstalledWindowsWslDistros();
+  return cachedWindowsWslDistros;
+}
+
 function resolveAvailableExecutionEnvironments(params: {
   readonly hostRuntime: ServerHostRuntime;
   readonly listWindowsWslDistros: () => ReadonlyArray<string>;
@@ -119,7 +131,21 @@ export function detectServerRuntimeEnvironment(
     hostRuntime,
     availableExecutionEnvironments: resolveAvailableExecutionEnvironments({
       hostRuntime,
-      listWindowsWslDistros: options.listWindowsWslDistros ?? listInstalledWindowsWslDistros,
+      listWindowsWslDistros: options.listWindowsWslDistros ?? listInstalledWindowsWslDistrosCached,
     }),
   };
+}
+
+export function getServerRuntimeEnvironment(): ServerRuntimeEnvironmentDetails {
+  if (cachedServerRuntimeEnvironment !== null) {
+    return cachedServerRuntimeEnvironment;
+  }
+
+  cachedServerRuntimeEnvironment = detectServerRuntimeEnvironment();
+  return cachedServerRuntimeEnvironment;
+}
+
+export function resetServerRuntimeEnvironmentCacheForTests(): void {
+  cachedWindowsWslDistros = null;
+  cachedServerRuntimeEnvironment = null;
 }

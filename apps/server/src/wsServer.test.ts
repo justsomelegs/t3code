@@ -53,7 +53,10 @@ import { GitCore } from "./git/Services/GitCore.ts";
 import { GitCommandError, GitManagerError } from "./git/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
-import { detectServerRuntimeEnvironment } from "./runtimeEnvironment";
+import {
+  getServerRuntimeEnvironment,
+  resetServerRuntimeEnvironmentCacheForTests,
+} from "./runtimeEnvironment";
 
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asProviderItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
@@ -78,7 +81,7 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
 };
-const expectedServerRuntime = detectServerRuntimeEnvironment();
+const expectedServerRuntime = getServerRuntimeEnvironment();
 
 class MockTerminalManager implements TerminalManagerShape {
   private readonly sessions = new Map<string, TerminalSessionSnapshot>();
@@ -585,6 +588,7 @@ describe("WebSocket Server", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
     vi.restoreAllMocks();
+    resetServerRuntimeEnvironmentCacheForTests();
   });
 
   it("sends welcome message on connect", async () => {
