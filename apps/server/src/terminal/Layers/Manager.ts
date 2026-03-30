@@ -4,6 +4,8 @@ import path from "node:path";
 
 import {
   DEFAULT_TERMINAL_ID,
+  type ServerExecutionEnvironment,
+  type ServerHostRuntime,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalOpenInput,
@@ -17,8 +19,14 @@ import { Effect, Encoding, Layer, Schema } from "effect";
 
 import { createLogger } from "../../logger";
 import { PtyAdapter, PtyAdapterShape, type PtyExitEvent, type PtyProcess } from "../Services/PTY";
-import { runProcess } from "../../processRunner";
+import { resolveProcessLaunchPlan, runProcess } from "../../processRunner";
 import { ServerConfig } from "../../config";
+import {
+  inferExecutionEnvironmentFromCwd,
+  resolveExecutionEnvironment,
+} from "../../executionEnvironment";
+import { isPosixPath, parseWslUncPath, resolveWslWorkingDirectory } from "../../pathInterop";
+import { RuntimeEnvironment } from "../../runtimeEnvironment/Services/RuntimeEnvironment";
 import {
   ShellCandidate,
   TerminalError,
@@ -46,19 +54,22 @@ const decodeTerminalCloseInput = Schema.decodeUnknownSync(TerminalCloseInput);
 
 type TerminalSubprocessChecker = (terminalPid: number) => Promise<boolean>;
 
-function defaultShellResolver(): string {
-  if (process.platform === "win32") {
+function defaultShellResolver(hostRuntime: ServerHostRuntime): string {
+  if (hostRuntime.osFamily === "windows") {
     return process.env.ComSpec ?? "cmd.exe";
   }
   return process.env.SHELL ?? "bash";
 }
 
-function normalizeShellCommand(value: string | undefined): string | null {
+function normalizeShellCommand(
+  value: string | undefined,
+  hostRuntime: ServerHostRuntime,
+): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
 
-  if (process.platform === "win32") {
+  if (hostRuntime.osFamily === "windows") {
     return trimmed;
   }
 
@@ -67,10 +78,13 @@ function normalizeShellCommand(value: string | undefined): string | null {
   return firstToken.replace(/^['"]|['"]$/g, "");
 }
 
-function shellCandidateFromCommand(command: string | null): ShellCandidate | null {
+function shellCandidateFromCommand(
+  command: string | null,
+  hostRuntime: ServerHostRuntime,
+): ShellCandidate | null {
   if (!command || command.length === 0) return null;
   const shellName = path.basename(command).toLowerCase();
-  if (process.platform !== "win32" && shellName === "zsh") {
+  if (hostRuntime.osFamily !== "windows" && shellName === "zsh") {
     return { shell: command, args: ["-o", "nopromptsp"] };
   }
   return { shell: command };
@@ -94,27 +108,80 @@ function uniqueShellCandidates(candidates: Array<ShellCandidate | null>): ShellC
   return ordered;
 }
 
-function resolveShellCandidates(shellResolver: () => string): ShellCandidate[] {
-  const requested = shellCandidateFromCommand(normalizeShellCommand(shellResolver()));
+function resolveWslShellCandidate(options: {
+  readonly hostRuntime: ServerHostRuntime;
+  readonly executionEnvironment: Extract<ServerExecutionEnvironment, { kind: "wsl" }>;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}): ShellCandidate {
+  const { distroName, cwd } = resolveWslWorkingDirectory({
+    cwd: options.cwd,
+    executionEnvironment: options.executionEnvironment,
+  });
+  const launchPlan = resolveProcessLaunchPlan(
+    "wsl.exe",
+    [...(distroName ? ["--distribution", distroName] : []), ...(cwd ? ["--cd", cwd] : [])],
+    {
+      env: options.env,
+      hostRuntime: options.hostRuntime,
+      executionEnvironment: { kind: "host" },
+    },
+  );
 
-  if (process.platform === "win32") {
+  if (launchPlan.shell !== false) {
+    throw new Error("WSL terminal launch requires direct executable resolution.");
+  }
+
+  return {
+    shell: launchPlan.command,
+    ...(launchPlan.args.length > 0 ? { args: [...launchPlan.args] } : {}),
+  };
+}
+
+function resolveShellCandidates(options: {
+  readonly shellResolver: () => string;
+  readonly hostRuntime: ServerHostRuntime;
+  readonly executionEnvironment: ServerExecutionEnvironment;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}): ShellCandidate[] {
+  if (options.executionEnvironment.kind === "wsl") {
+    return [
+      resolveWslShellCandidate({
+        hostRuntime: options.hostRuntime,
+        executionEnvironment: options.executionEnvironment,
+        cwd: options.cwd,
+        env: options.env,
+      }),
+    ];
+  }
+
+  const requested = shellCandidateFromCommand(
+    normalizeShellCommand(options.shellResolver(), options.hostRuntime),
+    options.hostRuntime,
+  );
+
+  if (options.hostRuntime.osFamily === "windows") {
     return uniqueShellCandidates([
       requested,
-      shellCandidateFromCommand(process.env.ComSpec ?? null),
-      shellCandidateFromCommand("powershell.exe"),
-      shellCandidateFromCommand("cmd.exe"),
+      shellCandidateFromCommand(process.env.ComSpec ?? null, options.hostRuntime),
+      shellCandidateFromCommand("powershell.exe", options.hostRuntime),
+      shellCandidateFromCommand("cmd.exe", options.hostRuntime),
     ]);
   }
 
   return uniqueShellCandidates([
     requested,
-    shellCandidateFromCommand(normalizeShellCommand(process.env.SHELL)),
-    shellCandidateFromCommand("/bin/zsh"),
-    shellCandidateFromCommand("/bin/bash"),
-    shellCandidateFromCommand("/bin/sh"),
-    shellCandidateFromCommand("zsh"),
-    shellCandidateFromCommand("bash"),
-    shellCandidateFromCommand("sh"),
+    shellCandidateFromCommand(
+      normalizeShellCommand(process.env.SHELL, options.hostRuntime),
+      options.hostRuntime,
+    ),
+    shellCandidateFromCommand("/bin/zsh", options.hostRuntime),
+    shellCandidateFromCommand("/bin/bash", options.hostRuntime),
+    shellCandidateFromCommand("/bin/sh", options.hostRuntime),
+    shellCandidateFromCommand("zsh", options.hostRuntime),
+    shellCandidateFromCommand("bash", options.hostRuntime),
+    shellCandidateFromCommand("sh", options.hostRuntime),
   ]);
 }
 
@@ -482,6 +549,33 @@ function normalizedRuntimeEnv(
   return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
+function executionEnvironmentPreferenceFromInput(
+  executionEnvironment: ServerExecutionEnvironment | undefined,
+):
+  | {
+      readonly kind: "auto";
+    }
+  | {
+      readonly kind: "host";
+    }
+  | {
+      readonly kind: "wsl";
+      readonly distroName: string | null;
+    } {
+  if (!executionEnvironment) {
+    return { kind: "auto" };
+  }
+
+  if (executionEnvironment.kind === "host") {
+    return { kind: "host" };
+  }
+
+  return {
+    kind: "wsl",
+    distroName: executionEnvironment.distroName,
+  };
+}
+
 interface TerminalManagerEvents {
   event: [event: TerminalEvent];
 }
@@ -491,6 +585,8 @@ interface TerminalManagerOptions {
   historyLineLimit?: number;
   ptyAdapter: PtyAdapterShape;
   shellResolver?: () => string;
+  hostRuntime: ServerHostRuntime;
+  availableExecutionEnvironments: ReadonlyArray<ServerExecutionEnvironment>;
   subprocessChecker?: TerminalSubprocessChecker;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
@@ -503,6 +599,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly historyLineLimit: number;
   private readonly ptyAdapter: PtyAdapterShape;
   private readonly shellResolver: () => string;
+  private readonly hostRuntime: ServerHostRuntime;
+  private readonly availableExecutionEnvironments: ReadonlyArray<ServerExecutionEnvironment>;
   private readonly persistQueues = new Map<string, Promise<void>>();
   private readonly persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pendingPersistHistory = new Map<string, string>();
@@ -522,7 +620,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     this.logsDir = options.logsDir ?? path.resolve(process.cwd(), ".logs", "terminals");
     this.historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
     this.ptyAdapter = options.ptyAdapter;
-    this.shellResolver = options.shellResolver ?? defaultShellResolver;
+    this.hostRuntime = options.hostRuntime;
+    this.availableExecutionEnvironments = options.availableExecutionEnvironments;
+    this.shellResolver = options.shellResolver ?? (() => defaultShellResolver(this.hostRuntime));
     this.persistDebounceMs = DEFAULT_PERSIST_DEBOUNCE_MS;
     this.subprocessChecker = options.subprocessChecker ?? defaultSubprocessChecker;
     this.subprocessPollIntervalMs =
@@ -536,7 +636,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   async open(raw: TerminalOpenInput): Promise<TerminalSessionSnapshot> {
     const input = decodeTerminalOpenInput(raw);
     return this.runWithThreadLock(input.threadId, async () => {
-      await this.assertValidCwd(input.cwd);
+      const executionEnvironment = this.resolveExecutionEnvironment(input);
+      await this.assertValidCwd(input.cwd, executionEnvironment);
 
       const sessionKey = toSessionKey(input.threadId, input.terminalId);
       const existing = this.sessions.get(sessionKey);
@@ -549,6 +650,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           threadId: input.threadId,
           terminalId: input.terminalId,
           cwd: input.cwd,
+          executionEnvironment,
           status: "starting",
           pid: null,
           history,
@@ -572,19 +674,24 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
       const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
       const currentRuntimeEnv = existing.runtimeEnv;
+      const currentExecutionEnvironment = existing.executionEnvironment;
       const targetCols = input.cols ?? existing.cols;
       const targetRows = input.rows ?? existing.rows;
       const runtimeEnvChanged =
         JSON.stringify(currentRuntimeEnv) !== JSON.stringify(nextRuntimeEnv);
+      const executionEnvironmentChanged =
+        JSON.stringify(currentExecutionEnvironment) !== JSON.stringify(executionEnvironment);
 
-      if (existing.cwd !== input.cwd || runtimeEnvChanged) {
+      if (existing.cwd !== input.cwd || runtimeEnvChanged || executionEnvironmentChanged) {
         this.stopProcess(existing);
         existing.cwd = input.cwd;
+        existing.executionEnvironment = executionEnvironment;
         existing.runtimeEnv = nextRuntimeEnv;
         existing.history = "";
         existing.pendingHistoryControlSequence = "";
         await this.persistHistory(existing.threadId, existing.terminalId, existing.history);
       } else if (existing.status === "exited" || existing.status === "error") {
+        existing.executionEnvironment = executionEnvironment;
         existing.runtimeEnv = nextRuntimeEnv;
         existing.history = "";
         existing.pendingHistoryControlSequence = "";
@@ -661,7 +768,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   async restart(raw: TerminalRestartInput): Promise<TerminalSessionSnapshot> {
     const input = decodeTerminalRestartInput(raw);
     return this.runWithThreadLock(input.threadId, async () => {
-      await this.assertValidCwd(input.cwd);
+      const executionEnvironment = this.resolveExecutionEnvironment(input);
+      await this.assertValidCwd(input.cwd, executionEnvironment);
 
       const sessionKey = toSessionKey(input.threadId, input.terminalId);
       let session = this.sessions.get(sessionKey);
@@ -672,6 +780,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           threadId: input.threadId,
           terminalId: input.terminalId,
           cwd: input.cwd,
+          executionEnvironment,
           status: "starting",
           pid: null,
           history: "",
@@ -692,6 +801,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       } else {
         this.stopProcess(session);
         session.cwd = input.cwd;
+        session.executionEnvironment = executionEnvironment;
         session.runtimeEnv = normalizedRuntimeEnv(input.env);
       }
 
@@ -771,7 +881,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     let ptyProcess: PtyProcess | null = null;
     let startedShell: string | null = null;
     try {
-      const shellCandidates = resolveShellCandidates(this.shellResolver);
+      const shellCandidates = resolveShellCandidates({
+        shellResolver: this.shellResolver,
+        hostRuntime: this.hostRuntime,
+        executionEnvironment: session.executionEnvironment,
+        cwd: session.cwd,
+        env: process.env,
+      });
       const terminalEnv = createTerminalSpawnEnv(process.env, session.runtimeEnv);
       let lastSpawnError: unknown = null;
 
@@ -780,7 +896,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           this.ptyAdapter.spawn({
             shell: candidate.shell,
             ...(candidate.args ? { args: candidate.args } : {}),
-            cwd: session.cwd,
+            // WSL terminals use `wsl.exe --cd ...`, so the PTY itself only needs a
+            // valid host cwd for spawning the bridge process.
+            cwd: session.executionEnvironment.kind === "host" ? session.cwd : process.cwd(),
             cols: session.cols,
             rows: session.rows,
             env: terminalEnv,
@@ -1241,7 +1359,42 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
-  private async assertValidCwd(cwd: string): Promise<void> {
+  private resolveExecutionEnvironment(
+    input: Pick<TerminalOpenInput, "cwd" | "executionEnvironment">,
+  ): ServerExecutionEnvironment {
+    if (input.executionEnvironment) {
+      return resolveExecutionEnvironment({
+        hostRuntime: this.hostRuntime,
+        availableExecutionEnvironments: this.availableExecutionEnvironments,
+        preference: executionEnvironmentPreferenceFromInput(input.executionEnvironment),
+      });
+    }
+
+    return inferExecutionEnvironmentFromCwd({
+      cwd: input.cwd,
+      hostRuntime: this.hostRuntime,
+      availableExecutionEnvironments: this.availableExecutionEnvironments,
+    });
+  }
+
+  private async assertValidCwd(
+    cwd: string,
+    executionEnvironment: ServerExecutionEnvironment,
+  ): Promise<void> {
+    if (executionEnvironment.kind === "wsl") {
+      resolveWslWorkingDirectory({
+        cwd,
+        executionEnvironment,
+      });
+      return;
+    }
+
+    if (this.hostRuntime.osFamily === "windows" && (isPosixPath(cwd) || parseWslUncPath(cwd))) {
+      throw new Error(
+        `Terminal cwd requires WSL execution, but the host runtime was selected: ${cwd}`,
+      );
+    }
+
     let stats: fs.Stats;
     try {
       stats = await fs.promises.stat(cwd);
@@ -1314,6 +1467,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       threadId: session.threadId,
       terminalId: session.terminalId,
       cwd: session.cwd,
+      executionEnvironment: session.executionEnvironment,
       status: session.status,
       pid: session.pid,
       history: session.history,
@@ -1364,8 +1518,19 @@ export const TerminalManagerLive = Layer.effect(
     const { terminalLogsDir } = yield* ServerConfig;
 
     const ptyAdapter = yield* PtyAdapter;
+    const runtimeEnvironment = yield* RuntimeEnvironment;
+    const { hostRuntime, availableExecutionEnvironments } =
+      yield* runtimeEnvironment.getRuntimeEnvironment;
     const runtime = yield* Effect.acquireRelease(
-      Effect.sync(() => new TerminalManagerRuntime({ logsDir: terminalLogsDir, ptyAdapter })),
+      Effect.sync(
+        () =>
+          new TerminalManagerRuntime({
+            logsDir: terminalLogsDir,
+            ptyAdapter,
+            hostRuntime,
+            availableExecutionEnvironments,
+          }),
+      ),
       (r) => Effect.sync(() => r.dispose()),
     );
 

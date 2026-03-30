@@ -76,6 +76,24 @@ describe("TerminalOpenInput", () => {
     });
   });
 
+  it("accepts an optional execution environment", () => {
+    const parsed = decodeSync(TerminalOpenInput, {
+      threadId: "thread-1",
+      cwd: "/tmp/project",
+      cols: 100,
+      rows: 24,
+      executionEnvironment: {
+        kind: "wsl",
+        distroName: "Ubuntu-24.04",
+      },
+    });
+
+    expect(parsed.executionEnvironment).toEqual({
+      kind: "wsl",
+      distroName: "Ubuntu-24.04",
+    });
+  });
+
   it("rejects invalid env keys", () => {
     expect(
       decodes(TerminalOpenInput, {
@@ -157,6 +175,7 @@ describe("TerminalSessionSnapshot", () => {
         threadId: "thread-1",
         terminalId: DEFAULT_TERMINAL_ID,
         cwd: "/tmp/project",
+        executionEnvironment: { kind: "host" },
         status: "running",
         pid: 1234,
         history: "hello\n",

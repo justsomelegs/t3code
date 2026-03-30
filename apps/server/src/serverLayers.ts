@@ -130,7 +130,10 @@ export function makeServerRuntimeServicesLayer(options?: {
     Layer.provideMerge(checkpointReactorLayer),
   );
 
-  const terminalLayer = TerminalManagerLive.pipe(Layer.provide(makeRuntimePtyAdapterLayer()));
+  const terminalLayer = TerminalManagerLive.pipe(
+    Layer.provide(makeRuntimePtyAdapterLayer()),
+    Layer.provideMerge(runtimeEnvironmentLayer),
+  );
 
   const gitManagerLayer = GitManagerLive.pipe(
     Layer.provideMerge(GitCoreLive),

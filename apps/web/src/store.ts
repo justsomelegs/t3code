@@ -256,6 +256,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
           ),
         },
         runtimeMode: thread.runtimeMode,
+        executionEnvironmentPreference: thread.executionEnvironmentPreference,
         interactionMode: thread.interactionMode,
         session: thread.session
           ? {

@@ -1,6 +1,7 @@
 import "../index.css";
 
 import {
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
   type OrchestrationReadModel,
@@ -93,6 +94,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         },
         interactionMode: "default",
         runtimeMode: "full-access",
+        executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         branch: "main",
         worktreePath: null,
         latestTurn: null,

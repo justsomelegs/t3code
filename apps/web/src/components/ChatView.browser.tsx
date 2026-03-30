@@ -3,6 +3,7 @@ import "../index.css";
 
 import {
   CheckpointRef,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
   type OrchestrationReadModel,
@@ -253,6 +254,7 @@ function createSnapshotForTargetUser(options: {
         },
         interactionMode: "default",
         runtimeMode: "full-access",
+        executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         branch: "main",
         worktreePath: null,
         latestTurn: null,
@@ -389,6 +391,7 @@ function addThreadToSnapshot(
         },
         interactionMode: "default",
         runtimeMode: "full-access",
+        executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         branch: "main",
         worktreePath: null,
         latestTurn: null,
@@ -541,6 +544,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       threadId: typeof body.threadId === "string" ? body.threadId : THREAD_ID,
       terminalId: typeof body.terminalId === "string" ? body.terminalId : "default",
       cwd: typeof body.cwd === "string" ? body.cwd : "/repo/project",
+      executionEnvironment:
+        body.executionEnvironment && typeof body.executionEnvironment === "object"
+          ? body.executionEnvironment
+          : { kind: "host" as const },
       status: "running",
       pid: 123,
       history: "",
@@ -1221,6 +1228,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           createdAt: NOW_ISO,
           runtimeMode: "full-access",
           interactionMode: "default",
+          executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
           branch: null,
           worktreePath: null,
           envMode: "local",
@@ -1278,6 +1286,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           createdAt: NOW_ISO,
           runtimeMode: "full-access",
           interactionMode: "default",
+          executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
           branch: null,
           worktreePath: null,
           envMode: "local",
@@ -1354,6 +1363,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           createdAt: NOW_ISO,
           runtimeMode: "full-access",
           interactionMode: "default",
+          executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
           branch: "feature/draft",
           worktreePath: "/repo/worktrees/feature-draft",
           envMode: "worktree",

@@ -4,6 +4,8 @@ import path from "node:path";
 
 import {
   DEFAULT_TERMINAL_ID,
+  type ServerExecutionEnvironment,
+  type ServerHostRuntime,
   type TerminalEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
@@ -182,6 +184,8 @@ describe("TerminalManager", () => {
     historyLineLimit = 5,
     options: {
       shellResolver?: () => string;
+      hostRuntime?: ServerHostRuntime;
+      availableExecutionEnvironments?: ReadonlyArray<ServerExecutionEnvironment>;
       subprocessChecker?: (terminalPid: number) => Promise<boolean>;
       subprocessPollIntervalMs?: number;
       processKillGraceMs?: number;
@@ -196,6 +200,21 @@ describe("TerminalManager", () => {
       logsDir,
       ptyAdapter,
       historyLineLimit,
+      hostRuntime: options.hostRuntime ?? {
+        rawPlatform: process.platform,
+        osFamily:
+          process.platform === "win32"
+            ? "windows"
+            : process.platform === "darwin"
+              ? "macos"
+              : process.platform === "linux"
+                ? "linux"
+                : "other",
+        pathStyle: process.platform === "win32" ? "windows" : "posix",
+        isWsl: false,
+        wslDistroName: null,
+      },
+      availableExecutionEnvironments: options.availableExecutionEnvironments ?? [{ kind: "host" }],
       shellResolver: options.shellResolver ?? (() => "/bin/bash"),
       ...(options.subprocessChecker ? { subprocessChecker: options.subprocessChecker } : {}),
       ...(options.subprocessPollIntervalMs
@@ -662,13 +681,16 @@ describe("TerminalManager", () => {
 
     expect(snapshot.status).toBe("running");
     expect(ptyAdapter.spawnInputs.length).toBeGreaterThanOrEqual(2);
-    expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
+    expect(ptyAdapter.spawnInputs[0]?.shell).toBe(
+      process.platform === "win32" ? "/definitely/missing-shell -l" : "/definitely/missing-shell",
+    );
 
     if (process.platform === "win32") {
       expect(
-        ptyAdapter.spawnInputs.some(
-          (input) => input.shell === "cmd.exe" || input.shell === "powershell.exe",
-        ),
+        ptyAdapter.spawnInputs.some((input) => {
+          const shellName = path.basename(input.shell).toLowerCase();
+          return shellName === "cmd.exe" || shellName === "powershell.exe";
+        }),
       ).toBe(true);
     } else {
       expect(
@@ -760,6 +782,59 @@ describe("TerminalManager", () => {
 
     expect(spawnInput.shell).toBe("/bin/zsh");
     expect(spawnInput.args).toEqual(["-o", "nopromptsp"]);
+
+    manager.dispose();
+  });
+
+  it("auto-selects WSL execution for Windows hosts when cwd is a WSL UNC path", async () => {
+    const { manager, ptyAdapter } = makeManager(5, {
+      hostRuntime: {
+        rawPlatform: "win32",
+        osFamily: "windows",
+        pathStyle: "windows",
+        isWsl: false,
+        wslDistroName: null,
+      },
+      availableExecutionEnvironments: [{ kind: "host" }, { kind: "wsl", distroName: "Ubuntu" }],
+    });
+
+    const snapshot = await manager.open(
+      openInput({
+        cwd: "\\\\wsl$\\Ubuntu\\home\\mike\\repo",
+      }),
+    );
+    const spawnInput = ptyAdapter.spawnInputs[0];
+    expect(spawnInput).toBeDefined();
+    if (!spawnInput) return;
+
+    expect(snapshot.executionEnvironment).toEqual({ kind: "wsl", distroName: "Ubuntu" });
+    expect(spawnInput.shell.toLowerCase()).toContain("wsl.exe");
+    expect(spawnInput.args).toEqual(["--distribution", "Ubuntu", "--cd", "/home/mike/repo"]);
+    expect(spawnInput.cwd).toBe(process.cwd());
+
+    manager.dispose();
+  });
+
+  it("rejects host terminal execution for WSL-style cwd paths on Windows hosts", async () => {
+    const { manager } = makeManager(5, {
+      hostRuntime: {
+        rawPlatform: "win32",
+        osFamily: "windows",
+        pathStyle: "windows",
+        isWsl: false,
+        wslDistroName: null,
+      },
+      availableExecutionEnvironments: [{ kind: "host" }, { kind: "wsl", distroName: "Ubuntu" }],
+    });
+
+    await expect(
+      manager.open(
+        openInput({
+          cwd: "/home/mike/repo",
+          executionEnvironment: { kind: "host" },
+        }),
+      ),
+    ).rejects.toThrow("Terminal cwd requires WSL execution");
 
     manager.dispose();
   });

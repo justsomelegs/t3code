@@ -1,5 +1,6 @@
 import {
   type ApprovalRequestId,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_MODEL_BY_PROVIDER,
   type ClaudeCodeEffort,
   type MessageId,
@@ -21,12 +22,15 @@ import {
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   RuntimeMode,
+  type ServerExecutionEnvironment,
+  type ServerExecutionEnvironmentPreference,
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
   getModelCapabilities,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
+import * as Equal from "effect/Equal";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
@@ -103,7 +107,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { cn, randomUUID } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { toastManager } from "./ui/toast";
@@ -191,6 +195,7 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
+const EMPTY_AVAILABLE_EXECUTION_ENVIRONMENTS: ServerExecutionEnvironment[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 
@@ -238,6 +243,41 @@ const terminalContextIdListsEqual = (
 ): boolean =>
   contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
 
+function executionEnvironmentPreferenceValue(
+  preference: ServerExecutionEnvironmentPreference,
+): string {
+  switch (preference.kind) {
+    case "auto":
+      return "auto";
+    case "host":
+      return "host";
+    case "wsl":
+      return preference.distroName ? `wsl:${preference.distroName}` : "wsl";
+  }
+}
+
+function parseExecutionEnvironmentPreferenceValue(
+  value: string,
+): ServerExecutionEnvironmentPreference | null {
+  if (value === "auto") {
+    return { kind: "auto" };
+  }
+  if (value === "host") {
+    return { kind: "host" };
+  }
+  if (value === "wsl") {
+    return { kind: "wsl", distroName: null };
+  }
+  if (value.startsWith("wsl:")) {
+    const distroName = value.slice(4).trim();
+    return {
+      kind: "wsl",
+      distroName: distroName.length > 0 ? distroName : null,
+    };
+  }
+  return null;
+}
+
 interface ChatViewProps {
   threadId: ThreadId;
 }
@@ -281,6 +321,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
+  );
+  const setComposerDraftExecutionEnvironmentPreference = useComposerDraftStore(
+    (store) => store.setExecutionEnvironmentPreference,
   );
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
@@ -482,6 +525,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const activeThread = serverThread ?? localDraftThread;
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+  const executionEnvironmentPreference =
+    composerDraft.executionEnvironmentPreference ??
+    activeThread?.executionEnvironmentPreference ??
+    DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE;
   const interactionMode =
     composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isServerThread = serverThread !== undefined;
@@ -545,6 +592,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       setProjectDraftThreadId(activeProject.id, nextThreadId, {
         createdAt: new Date().toISOString(),
         runtimeMode: DEFAULT_RUNTIME_MODE,
+        executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         interactionMode: DEFAULT_INTERACTION_MODE,
         ...input,
       });
@@ -1119,6 +1167,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
+  const hostRuntime = serverConfigQuery.data?.hostRuntime ?? null;
+  const availableExecutionEnvironments =
+    serverConfigQuery.data?.availableExecutionEnvironments ??
+    EMPTY_AVAILABLE_EXECUTION_ENVIRONMENTS;
   const providerStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
@@ -1126,6 +1178,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
+  const threadTerminalExecutionEnvironment = useMemo<ServerExecutionEnvironment | undefined>(() => {
+    if (executionEnvironmentPreference.kind === "auto") {
+      return undefined;
+    }
+    if (executionEnvironmentPreference.kind === "host") {
+      return { kind: "host" };
+    }
+    return {
+      kind: "wsl",
+      distroName: executionEnvironmentPreference.distroName,
+    };
+  }, [executionEnvironmentPreference]);
   const threadTerminalRuntimeEnv = useMemo(() => {
     if (!activeProjectCwd) return {};
     return projectScriptRuntimeEnv({
@@ -1135,6 +1199,38 @@ export default function ChatView({ threadId }: ChatViewProps) {
       worktreePath: activeThreadWorktreePath,
     });
   }, [activeProjectCwd, activeThreadWorktreePath]);
+  const executionEnvironmentControlOptions = useMemo(() => {
+    if (!hostRuntime || availableExecutionEnvironments.length <= 1) {
+      return [] as Array<{ value: string; label: string }>;
+    }
+    const options: Array<{ value: string; label: string }> = [
+      { value: "auto", label: "Auto" },
+      { value: "host", label: hostRuntime.osFamily === "windows" ? "Windows" : "Host" },
+    ];
+    for (const environment of availableExecutionEnvironments) {
+      if (environment.kind !== "wsl") {
+        continue;
+      }
+      options.push({
+        value: executionEnvironmentPreferenceValue({
+          kind: "wsl",
+          distroName: environment.distroName,
+        }),
+        label: environment.distroName ?? "WSL",
+      });
+    }
+    return options;
+  }, [availableExecutionEnvironments, hostRuntime]);
+  const executionEnvironmentControlValue = useMemo(
+    () => executionEnvironmentPreferenceValue(executionEnvironmentPreference),
+    [executionEnvironmentPreference],
+  );
+  const executionEnvironmentControlLabel = useMemo(() => {
+    const matchedOption = executionEnvironmentControlOptions.find(
+      (option) => option.value === executionEnvironmentControlValue,
+    );
+    return matchedOption?.label ?? "Auto";
+  }, [executionEnvironmentControlOptions, executionEnvironmentControlValue]);
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = branchesQuery.data?.isRepo ?? true;
   const terminalToggleShortcutLabel = useMemo(
@@ -1374,6 +1470,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
             terminalId: targetTerminalId,
             cwd: targetCwd,
             env: runtimeEnv,
+            ...(threadTerminalExecutionEnvironment
+              ? { executionEnvironment: threadTerminalExecutionEnvironment }
+              : {}),
             cols: SCRIPT_TERMINAL_COLS,
             rows: SCRIPT_TERMINAL_ROWS,
           }
@@ -1382,6 +1481,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
             terminalId: targetTerminalId,
             cwd: targetCwd,
             env: runtimeEnv,
+            ...(threadTerminalExecutionEnvironment
+              ? { executionEnvironment: threadTerminalExecutionEnvironment }
+              : {}),
           };
 
       try {
@@ -1411,6 +1513,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       terminalState.activeTerminalId,
       terminalState.runningTerminalIds,
       terminalState.terminalIds,
+      threadTerminalExecutionEnvironment,
     ],
   );
   const persistProjectScripts = useCallback(
@@ -1580,6 +1683,24 @@ export default function ChatView({ threadId }: ChatViewProps) {
       threadId,
     ],
   );
+  const handleExecutionEnvironmentPreferenceChange = useCallback(
+    (nextPreference: ServerExecutionEnvironmentPreference) => {
+      if (Equal.equals(nextPreference, executionEnvironmentPreference)) return;
+      setComposerDraftExecutionEnvironmentPreference(threadId, nextPreference);
+      if (isLocalDraftThread) {
+        setDraftThreadContext(threadId, { executionEnvironmentPreference: nextPreference });
+      }
+      scheduleComposerFocus();
+    },
+    [
+      executionEnvironmentPreference,
+      isLocalDraftThread,
+      scheduleComposerFocus,
+      setComposerDraftExecutionEnvironmentPreference,
+      setDraftThreadContext,
+      threadId,
+    ],
+  );
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
@@ -1588,6 +1709,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
       runtimeMode === "full-access" ? "approval-required" : "full-access",
     );
   }, [handleRuntimeModeChange, runtimeMode]);
+  const handleExecutionEnvironmentControlChange = useCallback(
+    (value: string) => {
+      const nextPreference = parseExecutionEnvironmentPreferenceValue(value);
+      if (!nextPreference) {
+        return;
+      }
+      handleExecutionEnvironmentPreferenceChange(nextPreference);
+    },
+    [handleExecutionEnvironmentPreferenceChange],
+  );
   const togglePlanSidebar = useCallback(() => {
     setPlanSidebarOpen((open) => {
       if (open) {
@@ -1608,6 +1739,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       createdAt: string;
       modelSelection?: ModelSelection;
       runtimeMode: RuntimeMode;
+      executionEnvironmentPreference: ServerExecutionEnvironmentPreference;
       interactionMode: ProviderInteractionMode;
     }) => {
       if (!serverThread) {
@@ -1639,6 +1771,21 @@ export default function ChatView({ threadId }: ChatViewProps) {
           commandId: newCommandId(),
           threadId: input.threadId,
           runtimeMode: input.runtimeMode,
+          createdAt: input.createdAt,
+        });
+      }
+
+      if (
+        !Equal.equals(
+          input.executionEnvironmentPreference,
+          serverThread.executionEnvironmentPreference,
+        )
+      ) {
+        await api.orchestration.dispatchCommand({
+          type: "thread.execution-environment-preference.set",
+          commandId: newCommandId(),
+          threadId: input.threadId,
+          executionEnvironmentPreference: input.executionEnvironmentPreference,
           createdAt: input.createdAt,
         });
       }
@@ -2579,6 +2726,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           title,
           modelSelection: threadCreateModelSelection,
           runtimeMode,
+          executionEnvironmentPreference,
           interactionMode,
           branch: nextThreadBranch,
           worktreePath: nextThreadWorktreePath,
@@ -2628,6 +2776,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           createdAt: messageCreatedAt,
           ...(selectedModel ? { modelSelection: selectedModelSelection } : {}),
           runtimeMode,
+          executionEnvironmentPreference,
           interactionMode,
         });
       }
@@ -2909,6 +3058,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           createdAt: messageCreatedAt,
           modelSelection: selectedModelSelection,
           runtimeMode,
+          executionEnvironmentPreference,
           interactionMode: nextInteractionMode,
         });
 
@@ -2972,6 +3122,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       persistThreadSettingsForNextTurn,
       resetSendPhase,
       runtimeMode,
+      executionEnvironmentPreference,
       selectedPromptEffort,
       selectedModelSelection,
       providerOptionsForDispatch,
@@ -3027,6 +3178,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         title: nextThreadTitle,
         modelSelection: nextThreadModelSelection,
         runtimeMode,
+        executionEnvironmentPreference,
         interactionMode: "default",
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
@@ -3094,6 +3246,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     navigate,
     resetSendPhase,
     runtimeMode,
+    executionEnvironmentPreference,
     selectedPromptEffort,
     selectedModelSelection,
     providerOptionsForDispatch,
@@ -3811,10 +3964,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             activePlan={Boolean(
                               activePlan || sidebarProposedPlan || planSidebarOpen,
                             )}
+                            executionEnvironmentOptions={executionEnvironmentControlOptions}
+                            executionEnvironmentValue={executionEnvironmentControlValue}
                             interactionMode={interactionMode}
                             planSidebarOpen={planSidebarOpen}
                             runtimeMode={runtimeMode}
                             traitsMenuContent={providerTraitsMenuContent}
+                            onExecutionEnvironmentChange={handleExecutionEnvironmentControlChange}
                             onToggleInteractionMode={toggleInteractionMode}
                             onTogglePlanSidebar={togglePlanSidebar}
                             onToggleRuntimeMode={toggleRuntimeMode}
@@ -3882,6 +4038,46 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                 {runtimeMode === "full-access" ? "Full access" : "Supervised"}
                               </span>
                             </Button>
+
+                            {executionEnvironmentControlOptions.length > 0 ? (
+                              <>
+                                <Separator
+                                  orientation="vertical"
+                                  className="mx-0.5 hidden h-4 sm:block"
+                                />
+                                <Menu>
+                                  <MenuTrigger
+                                    render={
+                                      <Button
+                                        variant="ghost"
+                                        className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+                                        size="sm"
+                                        type="button"
+                                        title="Execution environment"
+                                      />
+                                    }
+                                  >
+                                    <span>{executionEnvironmentControlLabel}</span>
+                                    <ChevronDownIcon className="size-4" />
+                                  </MenuTrigger>
+                                  <MenuPopup align="start">
+                                    <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+                                      Environment
+                                    </div>
+                                    <MenuRadioGroup
+                                      value={executionEnvironmentControlValue}
+                                      onValueChange={handleExecutionEnvironmentControlChange}
+                                    >
+                                      {executionEnvironmentControlOptions.map((option) => (
+                                        <MenuRadioItem key={option.value} value={option.value}>
+                                          {option.label}
+                                        </MenuRadioItem>
+                                      ))}
+                                    </MenuRadioGroup>
+                                  </MenuPopup>
+                                </Menu>
+                              </>
+                            ) : null}
 
                             {activePlan || sidebarProposedPlan || planSidebarOpen ? (
                               <>
@@ -4143,6 +4339,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
             threadId={activeThread.id}
             cwd={gitCwd ?? activeProject.cwd}
             runtimeEnv={threadTerminalRuntimeEnv}
+            {...(threadTerminalExecutionEnvironment
+              ? { executionEnvironment: threadTerminalExecutionEnvironment }
+              : {})}
             height={terminalState.terminalHeight}
             terminalIds={terminalState.terminalIds}
             activeTerminalId={terminalState.activeTerminalId}

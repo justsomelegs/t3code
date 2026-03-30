@@ -13,6 +13,7 @@ import type {
   CheckpointRef,
   ProviderInteractionMode,
   RuntimeMode,
+  ServerExecutionEnvironmentPreference as ServerExecutionEnvironmentPreferenceType,
 } from "@t3tools/contracts";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
@@ -95,6 +96,7 @@ export interface Thread {
   title: string;
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
+  executionEnvironmentPreference: ServerExecutionEnvironmentPreferenceType;
   interactionMode: ProviderInteractionMode;
   session: ThreadSession | null;
   messages: ChatMessage[];

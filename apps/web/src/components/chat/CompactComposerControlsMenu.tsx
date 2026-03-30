@@ -14,10 +14,16 @@ import {
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   activePlan: boolean;
+  executionEnvironmentOptions?: ReadonlyArray<{
+    value: string;
+    label: string;
+  }>;
+  executionEnvironmentValue?: string;
   interactionMode: ProviderInteractionMode;
   planSidebarOpen: boolean;
   runtimeMode: RuntimeMode;
   traitsMenuContent?: ReactNode;
+  onExecutionEnvironmentChange?: (value: string) => void;
   onToggleInteractionMode: () => void;
   onTogglePlanSidebar: () => void;
   onToggleRuntimeMode: () => void;
@@ -66,6 +72,31 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
           <MenuRadioItem value="full-access">Full access</MenuRadioItem>
         </MenuRadioGroup>
+        {props.executionEnvironmentOptions && props.executionEnvironmentOptions.length > 0 ? (
+          <>
+            <MenuDivider />
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Environment</div>
+            <MenuRadioGroup
+              value={props.executionEnvironmentValue}
+              onValueChange={(value) => {
+                if (
+                  !value ||
+                  value === props.executionEnvironmentValue ||
+                  !props.onExecutionEnvironmentChange
+                ) {
+                  return;
+                }
+                props.onExecutionEnvironmentChange(value);
+              }}
+            >
+              {props.executionEnvironmentOptions.map((option) => (
+                <MenuRadioItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </>
+        ) : null}
         {props.activePlan ? (
           <>
             <MenuDivider />

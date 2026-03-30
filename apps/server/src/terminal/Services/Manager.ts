@@ -7,6 +7,7 @@
  * @module TerminalManager
  */
 import {
+  ServerExecutionEnvironment,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -29,6 +30,7 @@ export interface TerminalSessionState {
   threadId: string;
   terminalId: string;
   cwd: string;
+  executionEnvironment: ServerExecutionEnvironment;
   status: TerminalSessionStatus;
   pid: number | null;
   history: string;

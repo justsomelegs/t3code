@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   CODEX_REASONING_EFFORT_OPTIONS,
   type ClaudeCodeEffort,
   type CodexReasoningEffort,
@@ -9,6 +10,8 @@ import {
   ProviderKind,
   ProviderModelOptions,
   RuntimeMode,
+  ServerExecutionEnvironmentPreference,
+  type ServerExecutionEnvironmentPreference as ServerExecutionEnvironmentPreferenceType,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -86,6 +89,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  executionEnvironmentPreference: Schema.optionalKey(ServerExecutionEnvironmentPreference),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
@@ -134,6 +138,7 @@ const PersistedDraftThreadState = Schema.Struct({
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  executionEnvironmentPreference: ServerExecutionEnvironmentPreference,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
@@ -166,6 +171,7 @@ export interface ComposerThreadDraftState {
   activeProvider: ProviderKind | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
+  executionEnvironmentPreference?: ServerExecutionEnvironmentPreferenceType | null;
 }
 
 export interface DraftThreadState {
@@ -173,6 +179,7 @@ export interface DraftThreadState {
   createdAt: string;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  executionEnvironmentPreference: ServerExecutionEnvironmentPreferenceType;
   branch: string | null;
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
@@ -200,6 +207,7 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      executionEnvironmentPreference?: ServerExecutionEnvironmentPreferenceType;
     },
   ) => void;
   setDraftThreadContext: (
@@ -212,6 +220,7 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      executionEnvironmentPreference?: ServerExecutionEnvironmentPreferenceType;
     },
   ) => void;
   clearProjectDraftThreadId: (projectId: ProjectId) => void;
@@ -241,6 +250,10 @@ interface ComposerDraftStoreState {
   setInteractionMode: (
     threadId: ThreadId,
     interactionMode: ProviderInteractionMode | null | undefined,
+  ) => void;
+  setExecutionEnvironmentPreference: (
+    threadId: ThreadId,
+    executionEnvironmentPreference: ServerExecutionEnvironmentPreferenceType | null | undefined,
   ) => void;
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
@@ -321,6 +334,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   activeProvider: null,
   runtimeMode: null,
   interactionMode: null,
+  executionEnvironmentPreference: null,
 });
 
 function createEmptyThreadDraft(): ComposerThreadDraftState {
@@ -334,6 +348,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
+    executionEnvironmentPreference: null,
   };
 }
 
@@ -403,7 +418,8 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
-    draft.interactionMode === null
+    draft.interactionMode === null &&
+    draft.executionEnvironmentPreference == null
   );
 }
 
@@ -783,6 +799,11 @@ function normalizePersistedDraftThreads(
           candidateDraftThread.interactionMode === "default"
             ? candidateDraftThread.interactionMode
             : DEFAULT_INTERACTION_MODE,
+        executionEnvironmentPreference: Schema.is(ServerExecutionEnvironmentPreference)(
+          candidateDraftThread.executionEnvironmentPreference,
+        )
+          ? candidateDraftThread.executionEnvironmentPreference
+          : DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
@@ -811,6 +832,7 @@ function normalizePersistedDraftThreads(
             createdAt: new Date().toISOString(),
             runtimeMode: DEFAULT_RUNTIME_MODE,
             interactionMode: DEFAULT_INTERACTION_MODE,
+            executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
             branch: null,
             worktreePath: null,
             envMode: "local",
@@ -867,6 +889,11 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
         ? draftCandidate.interactionMode
         : null;
+    const executionEnvironmentPreference = Schema.is(ServerExecutionEnvironmentPreference)(
+      draftCandidate.executionEnvironmentPreference,
+    )
+      ? draftCandidate.executionEnvironmentPreference
+      : null;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
@@ -925,7 +952,8 @@ function normalizePersistedDraftsByThreadId(
       terminalContexts.length === 0 &&
       !hasModelData &&
       !runtimeMode &&
-      !interactionMode
+      !interactionMode &&
+      !executionEnvironmentPreference
     ) {
       continue;
     }
@@ -936,6 +964,7 @@ function normalizePersistedDraftsByThreadId(
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
+      ...(executionEnvironmentPreference ? { executionEnvironmentPreference } : {}),
     };
   }
 
@@ -1004,7 +1033,8 @@ function partializeComposerDraftStoreState(
       draft.terminalContexts.length === 0 &&
       !hasModelData &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.interactionMode === null &&
+      draft.executionEnvironmentPreference === null
     ) {
       continue;
     }
@@ -1032,6 +1062,9 @@ function partializeComposerDraftStoreState(
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+      ...(draft.executionEnvironmentPreference
+        ? { executionEnvironmentPreference: draft.executionEnvironmentPreference }
+        : {}),
     };
     persistedDraftsByThreadId[threadId as ThreadId] = persistedDraft;
   }
@@ -1247,6 +1280,7 @@ function toHydratedThreadDraft(
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    executionEnvironmentPreference: persistedDraft.executionEnvironmentPreference ?? null,
   };
 }
 
@@ -1301,6 +1335,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               options?.interactionMode ??
               existingThread?.interactionMode ??
               DEFAULT_INTERACTION_MODE,
+            executionEnvironmentPreference:
+              options?.executionEnvironmentPreference ??
+              existingThread?.executionEnvironmentPreference ??
+              DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
             branch:
               options?.branch === undefined
                 ? (existingThread?.branch ?? null)
@@ -1317,6 +1355,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             existingThread.createdAt === nextDraftThread.createdAt &&
             existingThread.runtimeMode === nextDraftThread.runtimeMode &&
             existingThread.interactionMode === nextDraftThread.interactionMode &&
+            Equal.equals(
+              existingThread.executionEnvironmentPreference,
+              nextDraftThread.executionEnvironmentPreference,
+            ) &&
             existingThread.branch === nextDraftThread.branch &&
             existingThread.worktreePath === nextDraftThread.worktreePath &&
             existingThread.envMode === nextDraftThread.envMode;
@@ -1375,6 +1417,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
                 : options.createdAt || existing.createdAt,
             runtimeMode: options.runtimeMode ?? existing.runtimeMode,
             interactionMode: options.interactionMode ?? existing.interactionMode,
+            executionEnvironmentPreference:
+              options.executionEnvironmentPreference ??
+              existing.executionEnvironmentPreference ??
+              DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
             branch: options.branch === undefined ? existing.branch : (options.branch ?? null),
             worktreePath: nextWorktreePath,
             envMode:
@@ -1385,6 +1431,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             nextDraftThread.createdAt === existing.createdAt &&
             nextDraftThread.runtimeMode === existing.runtimeMode &&
             nextDraftThread.interactionMode === existing.interactionMode &&
+            Equal.equals(
+              nextDraftThread.executionEnvironmentPreference,
+              existing.executionEnvironmentPreference,
+            ) &&
             nextDraftThread.branch === existing.branch &&
             nextDraftThread.worktreePath === existing.worktreePath &&
             nextDraftThread.envMode === existing.envMode;
@@ -1835,6 +1885,39 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const nextDraft: ComposerThreadDraftState = {
             ...base,
             interactionMode: nextInteractionMode,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      setExecutionEnvironmentPreference: (threadId, executionEnvironmentPreference) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        const nextExecutionEnvironmentPreference = Schema.is(ServerExecutionEnvironmentPreference)(
+          executionEnvironmentPreference,
+        )
+          ? executionEnvironmentPreference
+          : null;
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId];
+          if (!existing && nextExecutionEnvironmentPreference === null) {
+            return state;
+          }
+          const base = existing ?? createEmptyThreadDraft();
+          if (
+            Equal.equals(base.executionEnvironmentPreference, nextExecutionEnvironmentPreference)
+          ) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...base,
+            executionEnvironmentPreference: nextExecutionEnvironmentPreference,
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };
           if (shouldRemoveDraft(nextDraft)) {

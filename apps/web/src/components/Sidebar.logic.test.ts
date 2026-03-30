@@ -13,7 +13,11 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -374,6 +378,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
       ...overrides?.modelSelection,
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
+    executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
     interactionMode: DEFAULT_INTERACTION_MODE,
     session: null,
     messages: [],
