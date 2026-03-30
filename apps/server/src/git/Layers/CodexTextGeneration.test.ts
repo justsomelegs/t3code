@@ -5,6 +5,10 @@ import { Effect, FileSystem, Layer, Path, Result } from "effect";
 import { expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
+import {
+  RuntimeEnvironment,
+  type RuntimeEnvironmentShape,
+} from "../../runtimeEnvironment/Services/RuntimeEnvironment.ts";
 import { CodexTextGenerationLive } from "./CodexTextGeneration.ts";
 import { TextGenerationError } from "../Errors.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
@@ -14,7 +18,29 @@ const DEFAULT_TEST_MODEL_SELECTION = {
   model: "gpt-5.4-mini",
 };
 
+const defaultRuntimeEnvironmentService: RuntimeEnvironmentShape = {
+  getRuntimeEnvironment: Effect.succeed({
+    hostRuntime: {
+      rawPlatform: "win32",
+      osFamily: "windows",
+      pathStyle: "windows",
+      isWsl: false,
+      wslDistroName: null,
+    },
+    availableExecutionEnvironments: [{ kind: "host" }],
+  }),
+  getHostRuntime: Effect.succeed({
+    rawPlatform: "win32",
+    osFamily: "windows",
+    pathStyle: "windows",
+    isWsl: false,
+    wslDistroName: null,
+  }),
+  getAvailableExecutionEnvironments: Effect.succeed([{ kind: "host" }]),
+};
+
 const CodexTextGenerationTestLayer = CodexTextGenerationLive.pipe(
+  Layer.provideMerge(Layer.succeed(RuntimeEnvironment, defaultRuntimeEnvironmentService)),
   Layer.provideMerge(
     ServerConfig.layerTest(process.cwd(), {
       prefix: "t3code-codex-text-generation-test-",

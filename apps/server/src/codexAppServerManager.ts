@@ -29,7 +29,11 @@ import {
 } from "./provider/codexCliVersion";
 import { inferExecutionEnvironmentFromCwd } from "./executionEnvironment";
 import { resolveProcessLaunchPlan } from "./processRunner";
-import { getServerRuntimeEnvironment } from "./runtimeEnvironment";
+import {
+  detectServerRuntimeEnvironment,
+  type ServerRuntimeEnvironmentDetails,
+} from "./runtimeEnvironment";
+import { RuntimeEnvironment } from "./runtimeEnvironment/Services/RuntimeEnvironment";
 
 type PendingRequestKey = string;
 
@@ -519,10 +523,22 @@ export interface CodexAppServerManagerEvents {
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
 
-  private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
+  private runPromise: <A, E, R>(effect: Effect.Effect<A, E, R>) => Promise<A>;
+  private readonly getRuntimeEnvironment: () => Promise<ServerRuntimeEnvironmentDetails>;
   constructor(services?: ServiceMap.ServiceMap<never>) {
     super();
-    this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
+    this.runPromise = (
+      services ? Effect.runPromiseWith(services) : Effect.runPromise
+    ) as typeof this.runPromise;
+    this.getRuntimeEnvironment = services
+      ? () =>
+          this.runPromise(
+            Effect.gen(function* () {
+              const runtimeEnvironment = yield* RuntimeEnvironment;
+              return yield* runtimeEnvironment.getRuntimeEnvironment;
+            }),
+          ) as Promise<ServerRuntimeEnvironmentDetails>
+      : () => Promise.resolve(detectServerRuntimeEnvironment());
   }
 
   async startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
@@ -547,7 +563,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexOptions = readCodexProviderOptions(input);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
-      const { hostRuntime, availableExecutionEnvironments } = getServerRuntimeEnvironment();
+      const { hostRuntime, availableExecutionEnvironments } = await this.getRuntimeEnvironment();
       const executionEnvironment = inferExecutionEnvironmentFromCwd({
         cwd: resolvedCwd,
         hostRuntime,

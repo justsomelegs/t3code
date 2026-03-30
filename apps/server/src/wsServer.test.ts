@@ -54,9 +54,9 @@ import { GitCommandError, GitManagerError } from "./git/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import {
-  getServerRuntimeEnvironment,
-  resetServerRuntimeEnvironmentCacheForTests,
-} from "./runtimeEnvironment";
+  RuntimeEnvironment,
+  type RuntimeEnvironmentShape,
+} from "./runtimeEnvironment/Services/RuntimeEnvironment";
 
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asProviderItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
@@ -81,7 +81,23 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
 };
-const expectedServerRuntime = getServerRuntimeEnvironment();
+const expectedServerRuntime = {
+  hostRuntime: {
+    rawPlatform: "win32" as const,
+    osFamily: "windows" as const,
+    pathStyle: "windows" as const,
+    isWsl: false,
+    wslDistroName: null,
+  },
+  availableExecutionEnvironments: [{ kind: "host" as const }],
+};
+const defaultRuntimeEnvironmentService: RuntimeEnvironmentShape = {
+  getRuntimeEnvironment: Effect.succeed(expectedServerRuntime),
+  getHostRuntime: Effect.succeed(expectedServerRuntime.hostRuntime),
+  getAvailableExecutionEnvironments: Effect.succeed(
+    expectedServerRuntime.availableExecutionEnvironments,
+  ),
+};
 
 class MockTerminalManager implements TerminalManagerShape {
   private readonly sessions = new Map<string, TerminalSessionSnapshot>();
@@ -493,6 +509,7 @@ describe("WebSocket Server", () => {
       staticDir?: string;
       providerLayer?: Layer.Layer<ProviderService, never>;
       providerHealth?: ProviderHealthShape;
+      runtimeEnvironment?: RuntimeEnvironmentShape;
       open?: OpenShape;
       gitManager?: GitManagerShape;
       gitCore?: Pick<GitCoreShape, "listBranches" | "initRepo" | "pullCurrentBranch">;
@@ -512,6 +529,10 @@ describe("WebSocket Server", () => {
     const providerHealthLayer = Layer.succeed(
       ProviderHealth,
       options.providerHealth ?? defaultProviderHealthService,
+    );
+    const runtimeEnvironmentLayer = Layer.succeed(
+      RuntimeEnvironment,
+      options.runtimeEnvironment ?? defaultRuntimeEnvironmentService,
     );
     const openLayer = Layer.succeed(Open, options.open ?? defaultOpenService);
     const serverConfigLayer = Layer.succeed(ServerConfig, {
@@ -541,7 +562,9 @@ describe("WebSocket Server", () => {
 
     const runtimeLayer = Layer.merge(
       Layer.merge(
-        makeServerRuntimeServicesLayer().pipe(Layer.provide(infrastructureLayer)),
+        makeServerRuntimeServicesLayer({ runtimeEnvironmentLayer }).pipe(
+          Layer.provide(infrastructureLayer),
+        ),
         infrastructureLayer,
       ),
       runtimeOverrides,
@@ -588,7 +611,6 @@ describe("WebSocket Server", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
     vi.restoreAllMocks();
-    resetServerRuntimeEnvironmentCacheForTests();
   });
 
   it("sends welcome message on connect", async () => {

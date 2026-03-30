@@ -33,6 +33,8 @@ import { GitHubCliLive } from "./git/Layers/GitHubCli";
 import { RoutingTextGenerationLive } from "./git/Layers/RoutingTextGeneration";
 import { PtyAdapter } from "./terminal/Services/PTY";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { RuntimeEnvironmentLive } from "./runtimeEnvironment/Layers/RuntimeEnvironment";
+import { RuntimeEnvironment } from "./runtimeEnvironment/Services/RuntimeEnvironment";
 
 type RuntimePtyAdapterLoader = {
   layer: Layer.Layer<PtyAdapter, never, FileSystem.FileSystem | Path.Path>;
@@ -84,8 +86,13 @@ export function makeServerProviderLayer(): Layer.Layer<
   }).pipe(Layer.unwrap);
 }
 
-export function makeServerRuntimeServicesLayer() {
-  const textGenerationLayer = RoutingTextGenerationLive;
+export function makeServerRuntimeServicesLayer(options?: {
+  readonly runtimeEnvironmentLayer?: Layer.Layer<RuntimeEnvironment, never>;
+}) {
+  const runtimeEnvironmentLayer = options?.runtimeEnvironmentLayer ?? RuntimeEnvironmentLive;
+  const textGenerationLayer = RoutingTextGenerationLive.pipe(
+    Layer.provideMerge(runtimeEnvironmentLayer),
+  );
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
 
   const orchestrationLayer = OrchestrationEngineLive.pipe(
@@ -132,6 +139,7 @@ export function makeServerRuntimeServicesLayer() {
   );
 
   return Layer.mergeAll(
+    runtimeEnvironmentLayer,
     orchestrationReactorLayer,
     GitCoreLive,
     gitManagerLayer,

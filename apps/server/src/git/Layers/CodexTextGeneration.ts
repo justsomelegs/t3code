@@ -11,7 +11,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { inferExecutionEnvironmentFromCwd } from "../../executionEnvironment.ts";
 import { makeRuntimeCommand } from "../../processRunner.ts";
-import { getServerRuntimeEnvironment } from "../../runtimeEnvironment.ts";
+import { RuntimeEnvironment } from "../../runtimeEnvironment/Services/RuntimeEnvironment.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
   type BranchNameGenerationInput,
@@ -38,6 +38,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* Effect.service(ServerConfig);
+  const runtimeEnvironment = yield* RuntimeEnvironment;
 
   type MaterializedImageAttachments = {
     readonly imagePaths: ReadonlyArray<string>;
@@ -148,7 +149,8 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         );
         const reasoningEffort =
           modelSelection.options?.reasoningEffort ?? CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT;
-        const { hostRuntime, availableExecutionEnvironments } = getServerRuntimeEnvironment();
+        const { hostRuntime, availableExecutionEnvironments } =
+          yield* runtimeEnvironment.getRuntimeEnvironment;
         const executionEnvironment = inferExecutionEnvironmentFromCwd({
           cwd,
           hostRuntime,

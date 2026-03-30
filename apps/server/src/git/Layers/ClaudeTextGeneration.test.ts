@@ -5,10 +5,36 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import { expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
+import {
+  RuntimeEnvironment,
+  type RuntimeEnvironmentShape,
+} from "../../runtimeEnvironment/Services/RuntimeEnvironment.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { ClaudeTextGenerationLive } from "./ClaudeTextGeneration.ts";
 
+const defaultRuntimeEnvironmentService: RuntimeEnvironmentShape = {
+  getRuntimeEnvironment: Effect.succeed({
+    hostRuntime: {
+      rawPlatform: "win32",
+      osFamily: "windows",
+      pathStyle: "windows",
+      isWsl: false,
+      wslDistroName: null,
+    },
+    availableExecutionEnvironments: [{ kind: "host" }],
+  }),
+  getHostRuntime: Effect.succeed({
+    rawPlatform: "win32",
+    osFamily: "windows",
+    pathStyle: "windows",
+    isWsl: false,
+    wslDistroName: null,
+  }),
+  getAvailableExecutionEnvironments: Effect.succeed([{ kind: "host" }]),
+};
+
 const ClaudeTextGenerationTestLayer = ClaudeTextGenerationLive.pipe(
+  Layer.provideMerge(Layer.succeed(RuntimeEnvironment, defaultRuntimeEnvironmentService)),
   Layer.provideMerge(
     ServerConfig.layerTest(process.cwd(), {
       prefix: "t3code-claude-text-generation-test-",

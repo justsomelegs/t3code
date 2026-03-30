@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import os from "node:os";
 
 import type {
@@ -14,13 +13,10 @@ interface DetectServerRuntimeEnvironmentOptions {
   readonly listWindowsWslDistros?: () => ReadonlyArray<string>;
 }
 
-interface ServerRuntimeEnvironmentDetails {
+export interface ServerRuntimeEnvironmentDetails {
   readonly hostRuntime: ServerHostRuntime;
   readonly availableExecutionEnvironments: ReadonlyArray<ServerExecutionEnvironment>;
 }
-
-let cachedWindowsWslDistros: ReadonlyArray<string> | null = null;
-let cachedServerRuntimeEnvironment: ServerRuntimeEnvironmentDetails | null = null;
 
 function normalizeOsFamily(platform: NodeJS.Platform): ServerHostOsFamily {
   switch (platform) {
@@ -56,7 +52,7 @@ function isWslHost(params: {
   );
 }
 
-function parseWslDistroList(stdout: string): ReadonlyArray<string> {
+export function parseWslDistroList(stdout: string): ReadonlyArray<string> {
   const distros = new Set<string>();
   for (const line of stdout.split(/\r?\n/u)) {
     const normalized = line
@@ -67,29 +63,6 @@ function parseWslDistroList(stdout: string): ReadonlyArray<string> {
     distros.add(normalized);
   }
   return Array.from(distros);
-}
-
-function listInstalledWindowsWslDistros(): ReadonlyArray<string> {
-  const result = spawnSync("wsl.exe", ["-l", "-q"], {
-    encoding: "utf8",
-    timeout: 1_500,
-    windowsHide: true,
-  });
-
-  if (result.error || result.status !== 0 || typeof result.stdout !== "string") {
-    return [];
-  }
-
-  return parseWslDistroList(result.stdout);
-}
-
-function listInstalledWindowsWslDistrosCached(): ReadonlyArray<string> {
-  if (cachedWindowsWslDistros !== null) {
-    return cachedWindowsWslDistros;
-  }
-
-  cachedWindowsWslDistros = listInstalledWindowsWslDistros();
-  return cachedWindowsWslDistros;
 }
 
 function resolveAvailableExecutionEnvironments(params: {
@@ -131,21 +104,7 @@ export function detectServerRuntimeEnvironment(
     hostRuntime,
     availableExecutionEnvironments: resolveAvailableExecutionEnvironments({
       hostRuntime,
-      listWindowsWslDistros: options.listWindowsWslDistros ?? listInstalledWindowsWslDistrosCached,
+      listWindowsWslDistros: options.listWindowsWslDistros ?? (() => []),
     }),
   };
-}
-
-export function getServerRuntimeEnvironment(): ServerRuntimeEnvironmentDetails {
-  if (cachedServerRuntimeEnvironment !== null) {
-    return cachedServerRuntimeEnvironment;
-  }
-
-  cachedServerRuntimeEnvironment = detectServerRuntimeEnvironment();
-  return cachedServerRuntimeEnvironment;
-}
-
-export function resetServerRuntimeEnvironmentCacheForTests(): void {
-  cachedWindowsWslDistros = null;
-  cachedServerRuntimeEnvironment = null;
 }

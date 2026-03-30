@@ -16,7 +16,7 @@ import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shar
 
 import { inferExecutionEnvironmentFromCwd } from "../../executionEnvironment.ts";
 import { makeRuntimeCommand } from "../../processRunner.ts";
-import { getServerRuntimeEnvironment } from "../../runtimeEnvironment.ts";
+import { RuntimeEnvironment } from "../../runtimeEnvironment/Services/RuntimeEnvironment.ts";
 import { TextGenerationError } from "../Errors.ts";
 import { type TextGenerationShape, TextGeneration } from "../Services/TextGeneration.ts";
 import {
@@ -43,6 +43,7 @@ const ClaudeOutputEnvelope = Schema.Struct({
 
 const makeClaudeTextGeneration = Effect.gen(function* () {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const runtimeEnvironment = yield* RuntimeEnvironment;
 
   const readStreamAsString = <E>(
     operation: string,
@@ -90,7 +91,8 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
       };
 
       const runClaudeCommand = Effect.gen(function* () {
-        const { hostRuntime, availableExecutionEnvironments } = getServerRuntimeEnvironment();
+        const { hostRuntime, availableExecutionEnvironments } =
+          yield* runtimeEnvironment.getRuntimeEnvironment;
         const executionEnvironment = inferExecutionEnvironmentFromCwd({
           cwd,
           hostRuntime,

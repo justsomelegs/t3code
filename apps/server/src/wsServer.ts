@@ -78,7 +78,7 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
-import { getServerRuntimeEnvironment } from "./runtimeEnvironment";
+import { RuntimeEnvironment } from "./runtimeEnvironment/Services/RuntimeEnvironment";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -218,7 +218,8 @@ export type ServerRuntimeServices =
   | TerminalManager
   | Keybindings
   | Open
-  | AnalyticsService;
+  | AnalyticsService
+  | RuntimeEnvironment;
 
 export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycleError>()(
   "ServerLifecycleError",
@@ -250,7 +251,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     autoBootstrapProjectFromCwd,
   } = serverConfig;
   const availableEditors = resolveAvailableEditors();
-  const { hostRuntime, availableExecutionEnvironments } = getServerRuntimeEnvironment();
+  const runtimeEnvironment = yield* RuntimeEnvironment;
+  const { hostRuntime, availableExecutionEnvironments } =
+    yield* runtimeEnvironment.getRuntimeEnvironment;
 
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
