@@ -6,7 +6,7 @@ import type {
   ServerHostRuntime,
 } from "@t3tools/contracts";
 
-interface DetectServerRuntimeEnvironmentOptions {
+export interface DetectServerRuntimeEnvironmentOptions {
   readonly platform?: NodeJS.Platform;
   readonly env?: NodeJS.ProcessEnv;
   readonly osRelease?: string;
