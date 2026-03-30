@@ -250,10 +250,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     logWebSocketEvents,
     autoBootstrapProjectFromCwd,
   } = serverConfig;
-  const availableEditors = resolveAvailableEditors();
   const runtimeEnvironment = yield* RuntimeEnvironment;
   const { hostRuntime, availableExecutionEnvironments } =
     yield* runtimeEnvironment.getRuntimeEnvironment;
+  const availableEditors = resolveAvailableEditors(undefined, undefined, hostRuntime);
 
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
