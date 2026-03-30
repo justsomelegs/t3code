@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { type OrchestrationEvent, ThreadId } from "@t3tools/contracts";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -25,6 +25,7 @@ import { migrateLocalSettingsToServer } from "../hooks/useSettings";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { applyOrchestrationEventBatch } from "../orchestrationEventSync";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -135,7 +136,6 @@ function errorDetails(error: unknown): string {
 
 function EventRouter() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  const applyOrchestrationEvents = useStore((store) => store.applyOrchestrationEvents);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
@@ -170,28 +170,23 @@ function EventRouter() {
     };
 
     const reconcileAfterEvents = (
-      events: ReadonlyArray<Parameters<typeof applyOrchestrationEvents>[0][number]>,
+      liveServerThreadIds: ReadonlySet<ThreadId>,
+      options: {
+        invalidateProviders: boolean;
+        invalidateProjects: boolean;
+        threadLifecycleChanged: boolean;
+      },
     ) => {
-      const createdThreadIds = events.flatMap((event) =>
-        event.type === "thread.created" ? [event.payload.threadId] : [],
-      );
-      if (createdThreadIds.length > 0) {
-        clearPromotedDraftThreads(new Set(createdThreadIds));
-      }
+      clearPromotedDraftThreads(liveServerThreadIds);
 
-      if (
-        events.some((event) => event.type === "thread.created" || event.type === "thread.deleted")
-      ) {
+      if (options.threadLifecycleChanged) {
         reconcileTerminalStates();
       }
 
-      if (
-        events.some(
-          (event) =>
-            event.type === "thread.turn-diff-completed" || event.type === "thread.reverted",
-        )
-      ) {
+      if (options.invalidateProviders) {
         void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
+      }
+      if (options.invalidateProjects) {
         void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
       }
     };
@@ -205,34 +200,25 @@ function EventRouter() {
       reconcileTerminalStates();
     };
 
-    const applyEvents = (
-      events: ReadonlyArray<Parameters<typeof applyOrchestrationEvents>[0][number]>,
-    ): boolean => {
-      const unseenEvents = events.filter((event) => event.sequence > latestSequence);
-      if (unseenEvents.length === 0) {
-        return true;
-      }
-
-      const firstEvent = unseenEvents[0];
-      if (!firstEvent || firstEvent.sequence !== latestSequence + 1) {
+    const applyEvents = (events: ReadonlyArray<OrchestrationEvent>): boolean => {
+      const currentState = useStore.getState();
+      const batchResult = applyOrchestrationEventBatch({
+        state: currentState,
+        latestSequence,
+        events,
+      });
+      if (!batchResult.applied) {
         return false;
       }
-
-      for (let index = 1; index < unseenEvents.length; index += 1) {
-        const previousEvent = unseenEvents[index - 1];
-        const currentEvent = unseenEvents[index];
-        if (
-          !previousEvent ||
-          !currentEvent ||
-          currentEvent.sequence !== previousEvent.sequence + 1
-        ) {
-          return false;
-        }
+      latestSequence = batchResult.latestSequence;
+      if (batchResult.state !== currentState) {
+        useStore.setState(batchResult.state);
       }
-
-      latestSequence = unseenEvents.at(-1)?.sequence ?? latestSequence;
-      applyOrchestrationEvents(unseenEvents);
-      reconcileAfterEvents(unseenEvents);
+      reconcileAfterEvents(batchResult.liveServerThreadIds, {
+        invalidateProviders: batchResult.invalidateProviders,
+        invalidateProjects: batchResult.invalidateProjects,
+        threadLifecycleChanged: batchResult.threadLifecycleChanged,
+      });
       return true;
     };
 
@@ -378,7 +364,6 @@ function EventRouter() {
     navigate,
     queryClient,
     removeOrphanedTerminalStates,
-    applyOrchestrationEvents,
     setProjectExpanded,
     syncServerReadModel,
   ]);

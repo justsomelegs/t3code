@@ -19,6 +19,12 @@ export interface AppState {
   threadsHydrated: boolean;
 }
 
+export interface OrchestrationEventApplyOutcome {
+  state: AppState;
+  invalidateProviders: boolean;
+  invalidateProjects: boolean;
+}
+
 const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
   "t3code:renderer-state:v7",
@@ -901,6 +907,30 @@ export function applyOrchestrationEvents(
   return events.reduce(
     (currentState, event) => applyOrchestrationEvent(currentState, event),
     state,
+  );
+}
+
+export function applyOrchestrationEventsWithOutcome(
+  state: AppState,
+  events: ReadonlyArray<OrchestrationEvent>,
+): OrchestrationEventApplyOutcome {
+  return events.reduce<OrchestrationEventApplyOutcome>(
+    (current, event) => {
+      const nextState = applyOrchestrationEvent(current.state, event);
+      const shouldInvalidateDiffQueries =
+        nextState !== current.state &&
+        (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted");
+      return {
+        state: nextState,
+        invalidateProviders: current.invalidateProviders || shouldInvalidateDiffQueries,
+        invalidateProjects: current.invalidateProjects || shouldInvalidateDiffQueries,
+      };
+    },
+    {
+      state,
+      invalidateProviders: false,
+      invalidateProjects: false,
+    },
   );
 }
 
