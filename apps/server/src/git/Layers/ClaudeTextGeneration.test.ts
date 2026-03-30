@@ -1,3 +1,4 @@
+import nodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path } from "effect";
@@ -22,41 +23,63 @@ function makeFakeClaudeBinary(dir: string) {
     const path = yield* Path.Path;
     const binDir = path.join(dir, "bin");
     const claudePath = path.join(binDir, "claude");
+    const claudeCmdPath = path.join(binDir, "claude.cmd");
+    const claudeScriptPath = path.join(binDir, "claude.cjs");
     yield* fs.makeDirectory(binDir, { recursive: true });
 
     yield* fs.writeFileString(
-      claudePath,
+      claudeScriptPath,
       [
-        "#!/bin/sh",
-        'args="$*"',
-        'stdin_content="$(cat)"',
-        'if [ -n "$T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN" ]; then',
-        '  printf "%s" "$args" | grep -F -- "$T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN" >/dev/null || {',
-        '    printf "%s\\n" "args missing expected content" >&2',
-        "    exit 2",
+        'const args = process.argv.slice(2).join(" ");',
+        "const stdinChunks = [];",
+        'process.stdin.on("data", (chunk) => stdinChunks.push(Buffer.from(chunk)));',
+        'process.stdin.on("end", () => {',
+        '  const stdinContent = Buffer.concat(stdinChunks).toString("utf8");',
+        "  const mustContain = process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN;",
+        "  const mustNotContain = process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN;",
+        '  const mustContainAll = JSON.parse(process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN_ALL ?? "[]");',
+        '  const mustNotContainAll = JSON.parse(process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN_ALL ?? "[]");',
+        "  const stdinMustContain = process.env.T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN;",
+        '  const normalizedArgs = args.replaceAll(\'"\', "");',
+        '  const normalizedMustContain = mustContain?.replaceAll(\'"\', "");',
+        '  const normalizedMustNotContain = mustNotContain?.replaceAll(\'"\', "");',
+        "  if (normalizedMustContain && !normalizedArgs.includes(normalizedMustContain)) {",
+        '    process.stderr.write("args missing expected content\\n");',
+        "    process.exit(2);",
         "  }",
-        "fi",
-        'if [ -n "$T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN" ]; then',
-        '  if printf "%s" "$args" | grep -F -- "$T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN" >/dev/null; then',
-        '    printf "%s\\n" "args contained forbidden content" >&2',
-        "    exit 3",
-        "  fi",
-        "fi",
-        'if [ -n "$T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN" ]; then',
-        '  printf "%s" "$stdin_content" | grep -F -- "$T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN" >/dev/null || {',
-        '    printf "%s\\n" "stdin missing expected content" >&2',
-        "    exit 4",
+        "  if (normalizedMustNotContain && normalizedArgs.includes(normalizedMustNotContain)) {",
+        '    process.stderr.write("args contained forbidden content\\n");',
+        "    process.exit(3);",
         "  }",
-        "fi",
-        'if [ -n "$T3_FAKE_CLAUDE_STDERR" ]; then',
-        '  printf "%s\\n" "$T3_FAKE_CLAUDE_STDERR" >&2',
-        "fi",
-        'printf "%s" "$T3_FAKE_CLAUDE_OUTPUT"',
-        'exit "${T3_FAKE_CLAUDE_EXIT_CODE:-0}"',
+        '  if (mustContainAll.some((entry) => !normalizedArgs.includes(String(entry).replaceAll(\'"\', "")))) {',
+        '    process.stderr.write("args missing expected content\\n");',
+        "    process.exit(2);",
+        "  }",
+        '  if (mustNotContainAll.some((entry) => normalizedArgs.includes(String(entry).replaceAll(\'"\', "")))) {',
+        '    process.stderr.write("args contained forbidden content\\n");',
+        "    process.exit(3);",
+        "  }",
+        "  if (stdinMustContain && !stdinContent.includes(stdinMustContain)) {",
+        '    process.stderr.write("stdin missing expected content\\n");',
+        "    process.exit(4);",
+        "  }",
+        "  if (process.env.T3_FAKE_CLAUDE_STDERR) {",
+        "    process.stderr.write(`${process.env.T3_FAKE_CLAUDE_STDERR}\\n`);",
+        "  }",
+        '  process.stdout.write(process.env.T3_FAKE_CLAUDE_OUTPUT ?? "");',
+        '  process.exit(Number(process.env.T3_FAKE_CLAUDE_EXIT_CODE ?? "0"));',
+        "});",
+        "process.stdin.resume();",
         "",
       ].join("\n"),
     );
+
+    yield* fs.writeFileString(claudePath, ["#!/bin/sh", 'exec node "$0.cjs" "$@"', ""].join("\n"));
     yield* fs.chmod(claudePath, 0o755);
+    yield* fs.writeFileString(
+      claudeCmdPath,
+      ["@echo off", 'node "%~dp0claude.cjs" %*', ""].join("\r\n"),
+    );
     return binDir;
   });
 }
@@ -68,6 +91,8 @@ function withFakeClaudeEnv<A, E, R>(
     stderr?: string;
     argsMustContain?: string;
     argsMustNotContain?: string;
+    argsMustContainAll?: ReadonlyArray<string>;
+    argsMustNotContainAll?: ReadonlyArray<string>;
     stdinMustContain?: string;
   },
   effect: Effect.Effect<A, E, R>,
@@ -83,10 +108,12 @@ function withFakeClaudeEnv<A, E, R>(
       const previousStderr = process.env.T3_FAKE_CLAUDE_STDERR;
       const previousArgsMustContain = process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN;
       const previousArgsMustNotContain = process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN;
+      const previousArgsMustContainAll = process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN_ALL;
+      const previousArgsMustNotContainAll = process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN_ALL;
       const previousStdinMustContain = process.env.T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN;
 
       yield* Effect.sync(() => {
-        process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+        process.env.PATH = `${binDir}${nodePath.delimiter}${previousPath ?? ""}`;
         process.env.T3_FAKE_CLAUDE_OUTPUT = input.output;
 
         if (input.exitCode !== undefined) {
@@ -113,6 +140,22 @@ function withFakeClaudeEnv<A, E, R>(
           delete process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN;
         }
 
+        if (input.argsMustContainAll !== undefined) {
+          process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN_ALL = JSON.stringify(
+            input.argsMustContainAll,
+          );
+        } else {
+          delete process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN_ALL;
+        }
+
+        if (input.argsMustNotContainAll !== undefined) {
+          process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN_ALL = JSON.stringify(
+            input.argsMustNotContainAll,
+          );
+        } else {
+          delete process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN_ALL;
+        }
+
         if (input.stdinMustContain !== undefined) {
           process.env.T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN = input.stdinMustContain;
         } else {
@@ -127,6 +170,8 @@ function withFakeClaudeEnv<A, E, R>(
         previousStderr,
         previousArgsMustContain,
         previousArgsMustNotContain,
+        previousArgsMustContainAll,
+        previousArgsMustNotContainAll,
         previousStdinMustContain,
       };
     }),
@@ -165,6 +210,19 @@ function withFakeClaudeEnv<A, E, R>(
           process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN = previous.previousArgsMustNotContain;
         }
 
+        if (previous.previousArgsMustContainAll === undefined) {
+          delete process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN_ALL;
+        } else {
+          process.env.T3_FAKE_CLAUDE_ARGS_MUST_CONTAIN_ALL = previous.previousArgsMustContainAll;
+        }
+
+        if (previous.previousArgsMustNotContainAll === undefined) {
+          delete process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN_ALL;
+        } else {
+          process.env.T3_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN_ALL =
+            previous.previousArgsMustNotContainAll;
+        }
+
         if (previous.previousStdinMustContain === undefined) {
           delete process.env.T3_FAKE_CLAUDE_STDIN_MUST_CONTAIN;
         } else {
@@ -184,8 +242,8 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGenerationLive", (it) => {
             body: "",
           },
         }),
-        argsMustContain: '--settings {"alwaysThinkingEnabled":false}',
-        argsMustNotContain: "--effort",
+        argsMustContainAll: ["--settings", "alwaysThinkingEnabled:false"],
+        argsMustNotContainAll: ["--effort"],
       },
       Effect.gen(function* () {
         const textGeneration = yield* TextGeneration;
@@ -219,7 +277,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGenerationLive", (it) => {
             body: "Body",
           },
         }),
-        argsMustContain: '--effort max --settings {"fastMode":true}',
+        argsMustContainAll: ["--effort", "max", "--settings", "fastMode:true"],
       },
       Effect.gen(function* () {
         const textGeneration = yield* TextGeneration;

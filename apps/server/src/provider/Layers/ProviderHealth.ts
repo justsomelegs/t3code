@@ -15,7 +15,7 @@ import type {
   ServerProviderStatusState,
 } from "@t3tools/contracts";
 import { Array, Effect, Fiber, FileSystem, Layer, Option, Path, Result, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   formatCodexCliUpgradeMessage,
@@ -23,6 +23,7 @@ import {
   parseCodexCliVersion,
 } from "../codexCliVersion";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
+import { makeRuntimeCommand } from "../../processRunner";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
@@ -242,9 +243,7 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 const runCodexCommand = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("codex", [...args], {
-      shell: process.platform === "win32",
-    });
+    const command = makeRuntimeCommand("codex", [...args]);
 
     const child = yield* spawner.spawn(command);
 
@@ -263,9 +262,7 @@ const runCodexCommand = (args: ReadonlyArray<string>) =>
 const runClaudeCommand = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("claude", [...args], {
-      shell: process.platform === "win32",
-    });
+    const command = makeRuntimeCommand("claude", [...args]);
 
     const child = yield* spawner.spawn(command);
 

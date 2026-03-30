@@ -27,6 +27,7 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
+import { resolveProcessLaunchPlan } from "./processRunner";
 
 type PendingRequestKey = string;
 
@@ -549,14 +550,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const childLaunchPlan = resolveProcessLaunchPlan(codexBinaryPath, ["app-server"], {
+        cwd: resolvedCwd,
+        env: {
+          ...process.env,
+          ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
+        },
+      });
+      const child = spawn(childLaunchPlan.command, childLaunchPlan.args, {
         cwd: resolvedCwd,
         env: {
           ...process.env,
           ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
         },
         stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
+        shell: childLaunchPlan.shell,
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -1610,14 +1618,19 @@ function assertSupportedCodexCliVersion(input: {
   readonly cwd: string;
   readonly homePath?: string;
 }): void {
-  const result = spawnSync(input.binaryPath, ["--version"], {
+  const env = {
+    ...process.env,
+    ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
+  };
+  const launchPlan = resolveProcessLaunchPlan(input.binaryPath, ["--version"], {
     cwd: input.cwd,
-    env: {
-      ...process.env,
-      ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
-    },
+    env,
+  });
+  const result = spawnSync(launchPlan.command, launchPlan.args, {
+    cwd: input.cwd,
+    env,
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: launchPlan.shell,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { Effect, FileSystem, Layer, Option, Path, Schema, Scope, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { CodexModelSelection } from "@t3tools/contracts";
 import { normalizeCodexModelOptions } from "@t3tools/shared/model";
@@ -9,6 +9,7 @@ import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shar
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { makeRuntimeCommand } from "../../processRunner.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
   type BranchNameGenerationInput,
@@ -145,7 +146,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         );
         const reasoningEffort =
           modelSelection.options?.reasoningEffort ?? CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT;
-        const command = ChildProcess.make(
+        const command = makeRuntimeCommand(
           "codex",
           [
             "exec",
@@ -166,7 +167,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ],
           {
             cwd,
-            shell: process.platform === "win32",
             stdin: {
               stream: Stream.encodeText(Stream.make(prompt)),
             },

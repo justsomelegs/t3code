@@ -1,4 +1,16 @@
 import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
+import { extname, join } from "node:path";
+
+import { ChildProcess } from "effect/unstable/process";
+import type { ServerExecutionEnvironment, ServerHostRuntime } from "@t3tools/contracts";
+
+import {
+  resolveCommandCandidates,
+  resolveExecutableFile,
+  resolvePathEnvironmentVariable,
+  resolveWindowsPathExtensions,
+  stripWrappingQuotes,
+} from "./commandResolution";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -8,6 +20,9 @@ export interface ProcessRunOptions {
   allowNonZeroExit?: boolean | undefined;
   maxBufferBytes?: number | undefined;
   outputMode?: "error" | "truncate" | undefined;
+  shell?: boolean | string | undefined;
+  hostRuntime?: ServerHostRuntime | undefined;
+  executionEnvironment?: ServerExecutionEnvironment | undefined;
 }
 
 export interface ProcessRunResult {
@@ -18,6 +33,41 @@ export interface ProcessRunResult {
   timedOut: boolean;
   stdoutTruncated?: boolean | undefined;
   stderrTruncated?: boolean | undefined;
+}
+
+interface ProcessLaunchPlanOptions {
+  cwd?: string | undefined;
+  env?: NodeJS.ProcessEnv | undefined;
+  shell?: boolean | string | undefined;
+  platform?: NodeJS.Platform | undefined;
+  hostRuntime?: ServerHostRuntime | undefined;
+  executionEnvironment?: ServerExecutionEnvironment | undefined;
+}
+
+export interface ProcessLaunchPlan {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly shell: boolean | string;
+}
+
+interface ResolvedWindowsCommand {
+  readonly path: string;
+  readonly kind: "native" | "batch";
+}
+
+const WINDOWS_BATCH_EXECUTABLE_EXTENSIONS = new Set([".CMD", ".BAT"]);
+
+function normalizeHostOsFamily(platform: NodeJS.Platform): ServerHostRuntime["osFamily"] {
+  switch (platform) {
+    case "win32":
+      return "windows";
+    case "darwin":
+      return "macos";
+    case "linux":
+      return "linux";
+    default:
+      return "other";
+  }
 }
 
 function commandLabel(command: string, args: readonly string[]): string {
@@ -80,6 +130,162 @@ function normalizeBufferError(
 
 const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
+function resolveEffectiveEnvironment(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...env,
+  };
+}
+
+function resolveWindowsCommand(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  cwd?: string,
+): ResolvedWindowsCommand | null {
+  const windowsPathExtensions = resolveWindowsPathExtensions(env);
+  const candidates = resolveCommandCandidates(command, "win32", windowsPathExtensions);
+
+  const classify = (filePath: string): ResolvedWindowsCommand => {
+    const extension = extname(filePath).toUpperCase();
+    return {
+      path: filePath,
+      kind: WINDOWS_BATCH_EXECUTABLE_EXTENSIONS.has(extension) ? "batch" : "native",
+    };
+  };
+
+  if (command.includes("/") || command.includes("\\")) {
+    for (const candidate of candidates) {
+      const resolvedCandidate = resolveExecutableFile(candidate, {
+        platform: "win32",
+        windowsPathExtensions,
+        cwd,
+      });
+      if (resolvedCandidate) {
+        return classify(resolvedCandidate);
+      }
+    }
+    return null;
+  }
+
+  const pathEntries = resolvePathEnvironmentVariable(env)
+    .split(";")
+    .map((entry) => stripWrappingQuotes(entry.trim()))
+    .filter((entry) => entry.length > 0);
+
+  for (const pathEntry of pathEntries) {
+    for (const candidate of candidates) {
+      const candidatePath = join(pathEntry, candidate);
+      if (
+        resolveExecutableFile(candidatePath, {
+          platform: "win32",
+          windowsPathExtensions,
+        })
+      ) {
+        return classify(candidatePath);
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolveWindowsCommandShell(env: NodeJS.ProcessEnv): string {
+  return env.ComSpec ?? env.COMSPEC ?? process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe";
+}
+
+function assertSupportedExecutionEnvironment(options: ProcessLaunchPlanOptions): void {
+  const executionEnvironment = options.executionEnvironment;
+  if (!executionEnvironment || executionEnvironment.kind === "host") {
+    return;
+  }
+
+  const hostOsFamily =
+    options.hostRuntime?.osFamily ??
+    normalizeHostOsFamily(options.platform ?? (process.platform as NodeJS.Platform));
+
+  if (executionEnvironment.kind === "wsl" && hostOsFamily !== "windows") {
+    throw new Error("WSL execution requires a Windows host.");
+  }
+
+  throw new Error("WSL execution launch planning is not implemented yet.");
+}
+
+export function resolveProcessLaunchPlan(
+  command: string,
+  args: ReadonlyArray<string>,
+  options: ProcessLaunchPlanOptions = {},
+): ProcessLaunchPlan {
+  assertSupportedExecutionEnvironment(options);
+
+  if (options.shell !== undefined) {
+    return {
+      command,
+      args: [...args],
+      shell: options.shell,
+    };
+  }
+
+  const platform = options.platform ?? process.platform;
+
+  if (platform !== "win32") {
+    return {
+      command,
+      args: [...args],
+      shell: false,
+    };
+  }
+
+  const env = resolveEffectiveEnvironment(options.env);
+  const resolved = resolveWindowsCommand(command, env, options.cwd);
+  if (!resolved) {
+    return {
+      command,
+      args: [...args],
+      shell: false,
+    };
+  }
+
+  if (resolved.kind === "batch") {
+    // Node-installed Windows CLIs commonly ship as .cmd wrappers, so we still
+    // need cmd.exe semantics after explicit command resolution.
+    return {
+      command: resolved.path,
+      args: [...args],
+      shell: resolveWindowsCommandShell(env),
+    };
+  }
+
+  return {
+    command: resolved.path,
+    args: [...args],
+    shell: false,
+  };
+}
+
+export interface RuntimeCommandOptions extends ChildProcess.CommandOptions {
+  hostRuntime?: ServerHostRuntime | undefined;
+  executionEnvironment?: ServerExecutionEnvironment | undefined;
+}
+
+export function makeRuntimeCommand(
+  command: string,
+  args: ReadonlyArray<string>,
+  options: RuntimeCommandOptions = {},
+): ChildProcess.StandardCommand {
+  const { hostRuntime, executionEnvironment, ...childProcessOptions } = options;
+  const launchPlan = resolveProcessLaunchPlan(command, args, {
+    cwd: options.cwd,
+    env: options.env,
+    shell: options.shell,
+    hostRuntime,
+    executionEnvironment,
+  });
+  return ChildProcess.make(launchPlan.command, launchPlan.args, {
+    ...childProcessOptions,
+    shell: launchPlan.shell,
+  });
+}
+
 /**
  * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
  * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
@@ -135,11 +341,18 @@ export async function runProcess(
   const outputMode = options.outputMode ?? "error";
 
   return new Promise<ProcessRunResult>((resolve, reject) => {
-    const child = spawn(command, args, {
+    const launchPlan = resolveProcessLaunchPlan(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      shell: options.shell,
+      hostRuntime: options.hostRuntime,
+      executionEnvironment: options.executionEnvironment,
+    });
+    const child = spawn(launchPlan.command, launchPlan.args, {
       cwd: options.cwd,
       env: options.env,
       stdio: "pipe",
-      shell: process.platform === "win32",
+      shell: launchPlan.shell,
     });
 
     let stdout = "";

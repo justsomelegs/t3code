@@ -8,12 +8,13 @@
  * @module ClaudeTextGeneration
  */
 import { Effect, Layer, Option, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { ClaudeModelSelection } from "@t3tools/contracts";
 import { normalizeClaudeModelOptions } from "@t3tools/shared/model";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
+import { makeRuntimeCommand } from "../../processRunner.ts";
 import { TextGenerationError } from "../Errors.ts";
 import { type TextGenerationShape, TextGeneration } from "../Services/TextGeneration.ts";
 import {
@@ -87,7 +88,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
       };
 
       const runClaudeCommand = Effect.gen(function* () {
-        const command = ChildProcess.make(
+        const command = makeRuntimeCommand(
           "claude",
           [
             "-p",
@@ -103,7 +104,6 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
           ],
           {
             cwd,
-            shell: process.platform === "win32",
             stdin: {
               stream: Stream.encodeText(Stream.make(prompt)),
             },
