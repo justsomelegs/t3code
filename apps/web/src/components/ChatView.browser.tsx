@@ -868,6 +868,7 @@ async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
   configureFixture?: (fixture: TestFixture) => void;
+  initialEntry?: string;
   resolveRpc?: (body: WsRequestEnvelope["body"]) => unknown | undefined;
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
