@@ -1,7 +1,6 @@
 import "../index.css";
 
 import {
-  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
   type OrchestrationReadModel,
@@ -9,6 +8,7 @@ import {
   type ServerConfig,
   type ThreadId,
   type WsWelcomePayload,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   WS_CHANNELS,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -47,21 +47,33 @@ function createBaseServerConfig(): ServerConfig {
     providers: [
       {
         provider: "codex",
+        enabled: true,
+        installed: true,
+        version: "0.116.0",
         status: "ready",
-        available: true,
-        authStatus: "authenticated",
+        auth: { status: "authenticated" },
         checkedAt: NOW_ISO,
+        models: [],
       },
     ],
     availableEditors: [],
     hostRuntime: {
-      rawPlatform: "linux",
-      osFamily: "linux",
-      pathStyle: "posix",
+      rawPlatform: "win32",
+      osFamily: "windows",
+      pathStyle: "windows",
       isWsl: false,
       wslDistroName: null,
     },
     availableExecutionEnvironments: [{ kind: "host" }],
+    settings: {
+      enableAssistantStreaming: false,
+      defaultThreadEnvMode: "local" as const,
+      textGenerationModelSelection: { provider: "codex" as const, model: "gpt-5.4-mini" },
+      providers: {
+        codex: { enabled: true, binaryPath: "", homePath: "", customModels: [] },
+        claudeAgent: { enabled: true, binaryPath: "", customModels: [] },
+      },
+    },
   };
 }
 
@@ -101,6 +113,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
+        archivedAt: null,
         deletedAt: null,
         messages: [
           {
@@ -321,7 +334,7 @@ describe("Keybindings update toast", () => {
     useStore.setState({
       projects: [],
       threads: [],
-      threadsHydrated: false,
+      bootstrapComplete: false,
     });
   });
 

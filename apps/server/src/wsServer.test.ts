@@ -12,6 +12,7 @@ import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "./confi
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
 
 import {
+  DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   DEFAULT_TERMINAL_ID,
   EDITORS,
@@ -25,7 +26,7 @@ import {
   WS_METHODS,
   type WebSocketResponse,
   type ProviderRuntimeEvent,
-  type ServerProviderStatus,
+  type ServerProvider,
   type KeybindingsConfig,
   type ResolvedKeybindingsConfig,
   type WsPushChannel,
@@ -46,7 +47,7 @@ import { TerminalManager, type TerminalManagerShape } from "./terminal/Services/
 import { makeSqlitePersistenceLive, SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { SqlClient, SqlError } from "effect/unstable/sql";
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
-import { ProviderHealth, type ProviderHealthShape } from "./provider/Services/ProviderHealth";
+import { ProviderRegistry, type ProviderRegistryShape } from "./provider/Services/ProviderRegistry";
 import { Open, type OpenShape } from "./open";
 import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
@@ -54,6 +55,7 @@ import { GitCore } from "./git/Services/GitCore.ts";
 import { GitCommandError, GitManagerError } from "./git/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
+import { ServerSettingsService, type ServerSettingsShape } from "./serverSettings";
 import {
   RuntimeEnvironment,
   type RuntimeEnvironmentShape,
@@ -69,18 +71,34 @@ const defaultOpenService: OpenShape = {
   openInEditor: () => Effect.void,
 };
 
-const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
+const defaultProviderStatuses: ReadonlyArray<ServerProvider> = [
   {
     provider: "codex",
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
     status: "ready",
-    available: true,
-    authStatus: "authenticated",
+    auth: {
+      status: "authenticated",
+      type: "chatgpt",
+      label: "Authenticated",
+    },
     checkedAt: "2026-01-01T00:00:00.000Z",
+    models: [],
   },
 ];
 
-const defaultProviderHealthService: ProviderHealthShape = {
-  getStatuses: Effect.succeed(defaultProviderStatuses),
+const defaultProviderRegistryService: ProviderRegistryShape = {
+  getProviders: Effect.succeed(defaultProviderStatuses),
+  refresh: () => Effect.succeed(defaultProviderStatuses),
+  streamChanges: Stream.empty,
+};
+const defaultServerSettingsService: ServerSettingsShape = {
+  start: Effect.void,
+  ready: Effect.void,
+  getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+  updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+  streamChanges: Stream.empty,
 };
 const expectedServerRuntime = {
   hostRuntime: {
@@ -511,7 +529,7 @@ describe("WebSocket Server", () => {
       baseDir?: string;
       staticDir?: string;
       providerLayer?: Layer.Layer<ProviderService, never>;
-      providerHealth?: ProviderHealthShape;
+      providerRegistry?: ProviderRegistryShape;
       runtimeEnvironment?: RuntimeEnvironmentShape;
       open?: OpenShape;
       gitManager?: GitManagerShape;
@@ -529,10 +547,11 @@ describe("WebSocket Server", () => {
     const scope = await Effect.runPromise(Scope.make("sequential"));
     const persistenceLayer = options.persistenceLayer ?? SqlitePersistenceMemory;
     const providerLayer = options.providerLayer ?? makeServerProviderLayer();
-    const providerHealthLayer = Layer.succeed(
-      ProviderHealth,
-      options.providerHealth ?? defaultProviderHealthService,
+    const providerRegistryLayer = Layer.succeed(
+      ProviderRegistry,
+      options.providerRegistry ?? defaultProviderRegistryService,
     );
+    const serverSettingsLayer = Layer.succeed(ServerSettingsService, defaultServerSettingsService);
     const runtimeEnvironmentLayer = Layer.succeed(
       RuntimeEnvironment,
       options.runtimeEnvironment ?? defaultRuntimeEnvironmentService,
@@ -574,7 +593,8 @@ describe("WebSocket Server", () => {
     );
     const dependenciesLayer = Layer.empty.pipe(
       Layer.provideMerge(runtimeLayer),
-      Layer.provideMerge(providerHealthLayer),
+      Layer.provideMerge(providerRegistryLayer),
+      Layer.provideMerge(serverSettingsLayer),
       Layer.provideMerge(openLayer),
       Layer.provideMerge(serverConfigLayer),
       Layer.provideMerge(AnalyticsService.layerTest),
@@ -891,6 +911,7 @@ describe("WebSocket Server", () => {
       availableEditors: expect.any(Array),
       hostRuntime: expectedServerRuntime.hostRuntime,
       availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
+      settings: DEFAULT_SERVER_SETTINGS,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
   });
@@ -918,6 +939,7 @@ describe("WebSocket Server", () => {
       availableEditors: expect.any(Array),
       hostRuntime: expectedServerRuntime.hostRuntime,
       availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
+      settings: DEFAULT_SERVER_SETTINGS,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
 
@@ -956,6 +978,7 @@ describe("WebSocket Server", () => {
       availableEditors: expect.any(Array),
       hostRuntime: expectedServerRuntime.hostRuntime,
       availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
+      settings: DEFAULT_SERVER_SETTINGS,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
     expect(fs.readFileSync(keybindingsPath, "utf8")).toBe("{ not-json");
@@ -989,7 +1012,7 @@ describe("WebSocket Server", () => {
       keybindingsConfigPath: string;
       keybindings: ResolvedKeybindingsConfig;
       issues: Array<{ kind: string; index?: number; message: string }>;
-      providers: ReadonlyArray<ServerProviderStatus>;
+      providers: ReadonlyArray<ServerProvider>;
       availableEditors: unknown;
       hostRuntime: unknown;
       availableExecutionEnvironments: unknown;
@@ -1043,7 +1066,6 @@ describe("WebSocket Server", () => {
     );
     expect(malformedPush.data).toEqual({
       issues: [{ kind: "keybindings.malformed-config", message: expect.any(String) }],
-      providers: defaultProviderStatuses,
     });
 
     const successPush = await rewriteKeybindingsAndWaitForPush(
@@ -1052,7 +1074,7 @@ describe("WebSocket Server", () => {
       "[]",
       (push) => Array.isArray(push.data.issues) && push.data.issues.length === 0,
     );
-    expect(successPush.data).toEqual({ issues: [], providers: defaultProviderStatuses });
+    expect(successPush.data).toEqual({ issues: [] });
   });
 
   it("routes shell.openInEditor through the injected open service", async () => {
@@ -1114,6 +1136,7 @@ describe("WebSocket Server", () => {
       availableEditors: expect.any(Array),
       hostRuntime: expectedServerRuntime.hostRuntime,
       availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
+      settings: DEFAULT_SERVER_SETTINGS,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
   });
@@ -1164,6 +1187,7 @@ describe("WebSocket Server", () => {
       availableEditors: expect.any(Array),
       hostRuntime: expectedServerRuntime.hostRuntime,
       availableExecutionEnvironments: expectedServerRuntime.availableExecutionEnvironments,
+      settings: DEFAULT_SERVER_SETTINGS,
     });
     expectAvailableEditors(
       (configResponse.result as { availableEditors: unknown }).availableEditors,
@@ -1395,6 +1419,19 @@ describe("WebSocket Server", () => {
       payload: {
         streamKind: "assistant_text",
         delta: "hello from runtime",
+      },
+    } as unknown as ProviderRuntimeEvent);
+    emitRuntimeEvent({
+      type: "item.completed",
+      eventId: asEventId("evt-ws-runtime-message-completed"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-1"),
+      itemId: asProviderItemId("item-1"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
       },
     } as unknown as ProviderRuntimeEvent);
 
@@ -1899,10 +1936,6 @@ describe("WebSocket Server", () => {
         actionId: "client-action-1",
         cwd: "/test",
         action: "commit_push",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.4-mini",
-        },
       },
       expect.objectContaining({
         actionId: "client-action-1",

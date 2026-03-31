@@ -55,7 +55,7 @@ import { OrchestrationEngineService } from "./orchestration/Services/Orchestrati
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProviderService } from "./provider/Services/ProviderService";
-import { ProviderHealth } from "./provider/Services/ProviderHealth";
+import { ProviderRegistry } from "./provider/Services/ProviderRegistry";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { clamp } from "effect/Number";
 import { Open, resolveAvailableEditors } from "./open";
@@ -80,6 +80,7 @@ import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
 import { RuntimeEnvironment } from "./runtimeEnvironment/Services/RuntimeEnvironment";
+import { ServerSettingsService } from "./serverSettings";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -210,7 +211,8 @@ export type ServerCoreRuntimeServices =
   | CheckpointDiffQuery
   | OrchestrationReactor
   | ProviderService
-  | ProviderHealth;
+  | ProviderRegistry
+  | ServerSettingsService;
 
 export type ServerRuntimeServices =
   | ServerCoreRuntimeServices
@@ -259,7 +261,8 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
-  const providerHealth = yield* ProviderHealth;
+  const providerRegistry = yield* ProviderRegistry;
+  const serverSettings = yield* ServerSettingsService;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -274,7 +277,23 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     ),
   );
 
-  const providerStatuses = yield* providerHealth.getStatuses;
+  yield* serverSettings.start.pipe(
+    Effect.mapError(
+      (cause) => new ServerLifecycleError({ operation: "serverSettingsStart", cause }),
+    ),
+  );
+  yield* serverSettings.ready.pipe(
+    Effect.mapError(
+      (cause) => new ServerLifecycleError({ operation: "serverSettingsReady", cause }),
+    ),
+  );
+
+  const providerStatuses = yield* providerRegistry.getProviders;
+  const currentSettings = yield* serverSettings.getSettings.pipe(
+    Effect.mapError(
+      (cause) => new ServerLifecycleError({ operation: "serverSettingsLoad", cause }),
+    ),
+  );
 
   const clients = yield* Ref.make(new Set<WebSocket>());
   const logger = createLogger("ws");
@@ -620,11 +639,23 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* Stream.runForEach(keybindingsManager.streamChanges, (event) =>
     pushBus.publishAll(WS_CHANNELS.serverConfigUpdated, {
       issues: event.issues,
-      providers: providerStatuses,
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
-  yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
+  yield* Stream.runForEach(serverSettings.streamChanges, (settings) =>
+    pushBus.publishAll(WS_CHANNELS.serverConfigUpdated, {
+      issues: [],
+      settings,
+    }),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
+  yield* Stream.runForEach(providerRegistry.streamChanges, (providers) =>
+    pushBus.publishAll(WS_CHANNELS.serverProvidersUpdated, {
+      providers,
+    }),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
+  yield* Scope.provide(orchestrationReactor.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
 
   let welcomeBootstrapProjectId: ProjectId | undefined;
@@ -901,12 +932,26 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           availableEditors,
           hostRuntime,
           availableExecutionEnvironments,
+          settings: currentSettings,
+        };
+
+      case WS_METHODS.serverRefreshProviders:
+        return {
+          providers: yield* providerRegistry.refresh(),
         };
 
       case WS_METHODS.serverUpsertKeybinding: {
         const body = stripRequestTag(request.body);
         const keybindingsConfig = yield* keybindingsManager.upsertKeybindingRule(body);
         return { keybindings: keybindingsConfig, issues: [] };
+      }
+
+      case WS_METHODS.serverGetSettings:
+        return yield* serverSettings.getSettings;
+
+      case WS_METHODS.serverUpdateSettings: {
+        const body = stripRequestTag(request.body);
+        return yield* serverSettings.updateSettings(body.patch);
       }
 
       default: {

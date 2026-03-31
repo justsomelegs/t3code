@@ -93,7 +93,6 @@ function toRuntimePayloadFromSession(
   session: ProviderSession,
   extra?: {
     readonly modelSelection?: unknown;
-    readonly providerOptions?: unknown;
     readonly executionEnvironmentPreference?: unknown;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
@@ -105,7 +104,6 @@ function toRuntimePayloadFromSession(
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
-    ...(extra?.providerOptions !== undefined ? { providerOptions: extra.providerOptions } : {}),
     ...(extra?.executionEnvironmentPreference !== undefined
       ? { executionEnvironmentPreference: extra.executionEnvironmentPreference }
       : {}),
@@ -124,17 +122,6 @@ function readPersistedModelSelection(
   }
   const raw = "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
   return Schema.is(ModelSelection)(raw) ? raw : undefined;
-}
-
-function readPersistedProviderOptions(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): Record<string, unknown> | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const raw = "providerOptions" in runtimePayload ? runtimePayload.providerOptions : undefined;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  return raw as Record<string, unknown>;
 }
 
 function readPersistedCwd(
@@ -192,7 +179,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       threadId: ThreadId,
       extra?: {
         readonly modelSelection?: unknown;
-        readonly providerOptions?: unknown;
         readonly executionEnvironmentPreference?: unknown;
         readonly lastRuntimeEvent?: string;
         readonly lastRuntimeEventAt?: string;
@@ -259,7 +245,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
         const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
         const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
-        const persistedProviderOptions = readPersistedProviderOptions(input.binding.runtimePayload);
         const persistedExecutionEnvironmentPreference = readPersistedExecutionEnvironmentPreference(
           input.binding.runtimePayload,
         );
@@ -269,7 +254,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           provider: input.binding.provider,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
           ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
-          ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
           ...(persistedExecutionEnvironmentPreference
             ? { executionEnvironmentPreference: persistedExecutionEnvironmentPreference }
             : {}),
@@ -355,7 +339,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
         yield* upsertSessionBinding(session, threadId, {
           modelSelection: input.modelSelection,
-          providerOptions: input.providerOptions,
           executionEnvironmentPreference:
             input.executionEnvironmentPreference ?? DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
         });

@@ -4,13 +4,14 @@ import { Effect, FileSystem, Layer, Option, Path, Schema, Scope, Stream } from "
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { CodexModelSelection } from "@t3tools/contracts";
-import { normalizeCodexModelOptions } from "@t3tools/shared/model";
+import { normalizeCodexModelOptionsWithCapabilities } from "@t3tools/shared/model";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { inferExecutionEnvironmentFromCwd } from "../../executionEnvironment.ts";
 import { makeRuntimeCommand } from "../../processRunner.ts";
+import { getCodexModelCapabilities } from "../../provider/Layers/CodexProvider.ts";
 import { RuntimeEnvironment } from "../../runtimeEnvironment/Services/RuntimeEnvironment.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
@@ -22,11 +23,13 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildThreadTitlePrompt,
 } from "../Prompts.ts";
 import {
   normalizeCliError,
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeThreadTitle,
   toJsonSchemaObject,
 } from "../Utils.ts";
 
@@ -85,7 +88,11 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     fileSystem.remove(filePath).pipe(Effect.catch(() => Effect.void));
 
   const materializeImageAttachments = (
-    _operation: "generateCommitMessage" | "generatePrContent" | "generateBranchName",
+    _operation:
+      | "generateCommitMessage"
+      | "generatePrContent"
+      | "generateBranchName"
+      | "generateThreadTitle",
     attachments: BranchNameGenerationInput["attachments"],
   ): Effect.Effect<MaterializedImageAttachments, TextGenerationError> =>
     Effect.gen(function* () {
@@ -126,7 +133,11 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     cleanupPaths = [],
     modelSelection,
   }: {
-    operation: "generateCommitMessage" | "generatePrContent" | "generateBranchName";
+    operation:
+      | "generateCommitMessage"
+      | "generatePrContent"
+      | "generateBranchName"
+      | "generateThreadTitle";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -143,8 +154,8 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const outputPath = yield* writeTempFile(operation, "codex-output", "");
 
       const runCodexCommand = Effect.gen(function* () {
-        const normalizedOptions = normalizeCodexModelOptions(
-          modelSelection.model,
+        const normalizedOptions = normalizeCodexModelOptionsWithCapabilities(
+          getCodexModelCapabilities(modelSelection.model),
           modelSelection.options,
         );
         const reasoningEffort =
@@ -364,10 +375,39 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     };
   });
 
+  const generateThreadTitle: TextGenerationShape["generateThreadTitle"] = Effect.fn(
+    "CodexTextGeneration.generateThreadTitle",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildThreadTitlePrompt({
+      message: input.message,
+      attachments: input.attachments,
+    });
+
+    if (input.modelSelection.provider !== "codex") {
+      return yield* new TextGenerationError({
+        operation: "generateThreadTitle",
+        detail: "Invalid model selection.",
+      });
+    }
+
+    const generated = yield* runCodexJson({
+      operation: "generateThreadTitle",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+    });
+
+    return {
+      title: sanitizeThreadTitle(generated.title),
+    };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
+    generateThreadTitle,
   } satisfies TextGenerationShape;
 });
 

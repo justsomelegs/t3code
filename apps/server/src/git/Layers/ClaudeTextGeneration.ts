@@ -11,11 +11,12 @@ import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { ClaudeModelSelection } from "@t3tools/contracts";
-import { normalizeClaudeModelOptions } from "@t3tools/shared/model";
+import { normalizeClaudeModelOptionsWithCapabilities } from "@t3tools/shared/model";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
 import { inferExecutionEnvironmentFromCwd } from "../../executionEnvironment.ts";
 import { makeRuntimeCommand } from "../../processRunner.ts";
+import { getClaudeModelCapabilities } from "../../provider/Layers/ClaudeProvider.ts";
 import { RuntimeEnvironment } from "../../runtimeEnvironment/Services/RuntimeEnvironment.ts";
 import { TextGenerationError } from "../Errors.ts";
 import { type TextGenerationShape, TextGeneration } from "../Services/TextGeneration.ts";
@@ -23,11 +24,13 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildThreadTitlePrompt,
 } from "../Prompts.ts";
 import {
   normalizeCliError,
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeThreadTitle,
   toJsonSchemaObject,
 } from "../Utils.ts";
 
@@ -71,7 +74,11 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
     outputSchemaJson,
     modelSelection,
   }: {
-    operation: "generateCommitMessage" | "generatePrContent" | "generateBranchName";
+    operation:
+      | "generateCommitMessage"
+      | "generatePrContent"
+      | "generateBranchName"
+      | "generateThreadTitle";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -79,8 +86,8 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       const jsonSchemaStr = JSON.stringify(toJsonSchemaObject(outputSchemaJson));
-      const normalizedOptions = normalizeClaudeModelOptions(
-        modelSelection.model,
+      const normalizedOptions = normalizeClaudeModelOptionsWithCapabilities(
+        getClaudeModelCapabilities(modelSelection.model),
         modelSelection.options,
       );
       const settings = {
@@ -303,10 +310,39 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
     };
   });
 
+  const generateThreadTitle: TextGenerationShape["generateThreadTitle"] = Effect.fn(
+    "ClaudeTextGeneration.generateThreadTitle",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildThreadTitlePrompt({
+      message: input.message,
+      attachments: input.attachments,
+    });
+
+    if (input.modelSelection.provider !== "claudeAgent") {
+      return yield* new TextGenerationError({
+        operation: "generateThreadTitle",
+        detail: "Invalid model selection.",
+      });
+    }
+
+    const generated = yield* runClaudeJson({
+      operation: "generateThreadTitle",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+    });
+
+    return {
+      title: sanitizeThreadTitle(generated.title),
+    };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
+    generateThreadTitle,
   } satisfies TextGenerationShape;
 });
 

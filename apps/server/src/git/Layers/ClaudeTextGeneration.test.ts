@@ -9,6 +9,7 @@ import {
   RuntimeEnvironment,
   type RuntimeEnvironmentShape,
 } from "../../runtimeEnvironment/Services/RuntimeEnvironment.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { ClaudeTextGenerationLive } from "./ClaudeTextGeneration.ts";
 
@@ -35,6 +36,7 @@ const defaultRuntimeEnvironmentService: RuntimeEnvironmentShape = {
 
 const ClaudeTextGenerationTestLayer = ClaudeTextGenerationLive.pipe(
   Layer.provideMerge(Layer.succeed(RuntimeEnvironment, defaultRuntimeEnvironmentService)),
+  Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(
     ServerConfig.layerTest(process.cwd(), {
       prefix: "t3code-claude-text-generation-test-",

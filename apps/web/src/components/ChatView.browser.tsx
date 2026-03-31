@@ -2,19 +2,21 @@
 import "../index.css";
 
 import {
-  CheckpointRef,
-  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+  EventId,
   ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_WS_CHANNELS,
   type MessageId,
+  type OrchestrationEvent,
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
   type ThreadId,
-  type TurnId,
   type WsWelcomePayload,
   WS_CHANNELS,
   WS_METHODS,
   OrchestrationSessionStatus,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+  DEFAULT_SERVER_SETTINGS,
 } from "@t3tools/contracts";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
@@ -33,6 +35,7 @@ import { isMacPlatform } from "../lib/utils";
 import { getRouter } from "../router";
 import { useStore } from "../store";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const UUID_ROUTE_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -57,6 +60,9 @@ interface TestFixture {
 
 let fixture: TestFixture;
 const wsRequests: WsRequestEnvelope["body"][] = [];
+let customWsRpcResolver: ((body: WsRequestEnvelope["body"]) => unknown | undefined) | null = null;
+let wsClient: { send: (message: string) => void } | null = null;
+let pushSequence = 1;
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
 interface ViewportSpec {
@@ -113,21 +119,28 @@ function createBaseServerConfig(): ServerConfig {
     providers: [
       {
         provider: "codex",
+        enabled: true,
+        installed: true,
+        version: "0.116.0",
         status: "ready",
-        available: true,
-        authStatus: "authenticated",
+        auth: { status: "authenticated" },
         checkedAt: NOW_ISO,
+        models: [],
       },
     ],
     availableEditors: [],
     hostRuntime: {
-      rawPlatform: "linux",
-      osFamily: "linux",
-      pathStyle: "posix",
+      rawPlatform: "win32",
+      osFamily: "windows",
+      pathStyle: "windows",
       isWsl: false,
       wslDistroName: null,
     },
     availableExecutionEnvironments: [{ kind: "host" }],
+    settings: {
+      ...DEFAULT_SERVER_SETTINGS,
+      ...DEFAULT_CLIENT_SETTINGS,
+    },
   };
 }
 
@@ -261,6 +274,7 @@ function createSnapshotForTargetUser(options: {
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
+        archivedAt: null,
         deletedAt: null,
         messages,
         activities: [],
@@ -278,85 +292,6 @@ function createSnapshotForTargetUser(options: {
       },
     ],
     updatedAt: NOW_ISO,
-  };
-}
-
-function createSnapshotWithTurnDiffCheckpoints(): OrchestrationReadModel {
-  const snapshot = createSnapshotForTargetUser({
-    targetMessageId: "msg-user-diff-panel-latest-chip-test" as MessageId,
-    targetText: "diff panel latest chip test",
-  });
-  const threads = [...snapshot.threads];
-  const threadIndex = threads.findIndex((thread) => thread.id === THREAD_ID);
-
-  if (threadIndex < 0) {
-    return snapshot;
-  }
-
-  const thread = threads[threadIndex];
-  if (!thread) {
-    return snapshot;
-  }
-
-  threads[threadIndex] = {
-    ...thread,
-    checkpoints: [
-      {
-        turnId: "turn-1" as TurnId,
-        checkpointTurnCount: 1,
-        checkpointRef: CheckpointRef.makeUnsafe("refs/t3/checkpoints/checkpoint-1"),
-        status: "ready" as const,
-        files: [],
-        assistantMessageId: null,
-        completedAt: isoAt(120),
-      },
-      {
-        turnId: "turn-2" as TurnId,
-        checkpointTurnCount: 2,
-        checkpointRef: CheckpointRef.makeUnsafe("refs/t3/checkpoints/checkpoint-2"),
-        status: "ready" as const,
-        files: [],
-        assistantMessageId: null,
-        completedAt: isoAt(240),
-      },
-    ],
-  };
-
-  return {
-    ...snapshot,
-    threads,
-  };
-}
-
-function appendCheckpointToStore(
-  state: ReturnType<typeof useStore.getState>,
-  checkpoint: {
-    turnId: TurnId;
-    checkpointTurnCount: number;
-    checkpointRef: string;
-    completedAt: string;
-  },
-): ReturnType<typeof useStore.getState> {
-  return {
-    ...state,
-    threads: state.threads.map((thread) =>
-      thread.id === THREAD_ID
-        ? {
-            ...thread,
-            turnDiffSummaries: [
-              ...thread.turnDiffSummaries,
-              {
-                turnId: checkpoint.turnId,
-                checkpointTurnCount: checkpoint.checkpointTurnCount,
-                checkpointRef: CheckpointRef.makeUnsafe(checkpoint.checkpointRef),
-                status: "ready" as const,
-                files: [],
-                completedAt: checkpoint.completedAt,
-              },
-            ],
-          }
-        : thread,
-    ),
   };
 }
 
@@ -398,6 +333,7 @@ function addThreadToSnapshot(
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
+        archivedAt: null,
         deletedAt: null,
         messages: [],
         activities: [],
@@ -415,6 +351,80 @@ function addThreadToSnapshot(
       },
     ],
   };
+}
+
+function createThreadCreatedEvent(threadId: ThreadId, sequence: number): OrchestrationEvent {
+  return {
+    sequence,
+    eventId: EventId.makeUnsafe(`event-thread-created-${sequence}`),
+    aggregateKind: "thread",
+    aggregateId: threadId,
+    occurredAt: NOW_ISO,
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.created",
+    payload: {
+      threadId,
+      projectId: PROJECT_ID,
+      title: "New thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5",
+      },
+      runtimeMode: "full-access",
+      executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+      interactionMode: "default",
+      branch: "main",
+      worktreePath: null,
+      createdAt: NOW_ISO,
+      updatedAt: NOW_ISO,
+    },
+  };
+}
+
+function sendOrchestrationDomainEvent(event: OrchestrationEvent): void {
+  if (!wsClient) {
+    throw new Error("WebSocket client not connected");
+  }
+  wsClient.send(
+    JSON.stringify({
+      type: "push",
+      sequence: pushSequence++,
+      channel: ORCHESTRATION_WS_CHANNELS.domainEvent,
+      data: event,
+    }),
+  );
+}
+
+async function waitForWsClient(): Promise<{ send: (message: string) => void }> {
+  let client: { send: (message: string) => void } | null = null;
+  await vi.waitFor(
+    () => {
+      client = wsClient;
+      expect(client).toBeTruthy();
+    },
+    { timeout: 8_000, interval: 16 },
+  );
+  if (!client) {
+    throw new Error("WebSocket client not connected");
+  }
+  return client;
+}
+
+async function promoteDraftThreadViaDomainEvent(threadId: ThreadId): Promise<void> {
+  await waitForWsClient();
+  fixture.snapshot = addThreadToSnapshot(fixture.snapshot, threadId);
+  sendOrchestrationDomainEvent(
+    createThreadCreatedEvent(threadId, fixture.snapshot.snapshotSequence),
+  );
+  await vi.waitFor(
+    () => {
+      expect(useComposerDraftStore.getState().draftThreadsByThreadId[threadId]).toBeUndefined();
+    },
+    { timeout: 8_000, interval: 16 },
+  );
 }
 
 function createDraftOnlySnapshot(): OrchestrationReadModel {
@@ -438,6 +448,26 @@ function withProjectScripts(
       project.id === PROJECT_ID ? { ...project, scripts: Array.from(scripts) } : project,
     ),
   };
+}
+
+function setDraftThreadWithoutWorktree(): void {
+  useComposerDraftStore.setState({
+    draftThreadsByThreadId: {
+      [THREAD_ID]: {
+        projectId: PROJECT_ID,
+        createdAt: NOW_ISO,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+        branch: null,
+        worktreePath: null,
+        envMode: "local",
+      },
+    },
+    projectDraftThreadIdByProjectId: {
+      [PROJECT_ID]: THREAD_ID,
+    },
+  });
 }
 
 function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
@@ -498,6 +528,10 @@ function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
 }
 
 function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
+  const customResult = customWsRpcResolver?.(body);
+  if (customResult !== undefined) {
+    return customResult;
+  }
   const tag = body._tag;
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
@@ -545,10 +579,6 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       threadId: typeof body.threadId === "string" ? body.threadId : THREAD_ID,
       terminalId: typeof body.terminalId === "string" ? body.terminalId : "default",
       cwd: typeof body.cwd === "string" ? body.cwd : "/repo/project",
-      executionEnvironment:
-        body.executionEnvironment && typeof body.executionEnvironment === "object"
-          ? body.executionEnvironment
-          : { kind: "host" as const },
       status: "running",
       pid: 123,
       history: "",
@@ -562,10 +592,12 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
+    wsClient = client;
+    pushSequence = 1;
     client.send(
       JSON.stringify({
         type: "push",
-        sequence: 1,
+        sequence: pushSequence++,
         channel: WS_CHANNELS.serverWelcome,
         data: fixture.welcome,
       }),
@@ -667,22 +699,6 @@ async function waitForURL(
     { timeout: 8_000, interval: 16 },
   );
   return pathname;
-}
-
-async function waitForSearch(
-  router: ReturnType<typeof getRouter>,
-  predicate: (search: Record<string, unknown>) => boolean,
-  errorMessage: string,
-): Promise<Record<string, unknown>> {
-  let search: Record<string, unknown> = {};
-  await vi.waitFor(
-    () => {
-      search = router.state.location.search as Record<string, unknown>;
-      expect(predicate(search), errorMessage).toBe(true);
-    },
-    { timeout: 8_000, interval: 16 },
-  );
-  return search;
 }
 
 async function waitForComposerEditor(): Promise<HTMLElement> {
@@ -852,10 +868,11 @@ async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
   configureFixture?: (fixture: TestFixture) => void;
-  initialEntry?: string;
+  resolveRpc?: (body: WsRequestEnvelope["body"]) => unknown | undefined;
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
+  customWsRpcResolver = options.resolveRpc ?? null;
   await setViewport(options.viewport);
   await waitForProductionStyles();
 
@@ -870,7 +887,7 @@ async function mountChatView(options: {
 
   const router = getRouter(
     createMemoryHistory({
-      initialEntries: [options.initialEntry ?? `/${THREAD_ID}`],
+      initialEntries: [`/${THREAD_ID}`],
     }),
   );
 
@@ -881,6 +898,7 @@ async function mountChatView(options: {
   await waitForLayout();
 
   const cleanup = async () => {
+    customWsRpcResolver = null;
     await screen.unmount();
     host.remove();
   };
@@ -940,6 +958,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     localStorage.clear();
     document.body.innerHTML = "";
     wsRequests.length = 0;
+    customWsRpcResolver = null;
     useComposerDraftStore.setState({
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
@@ -950,118 +969,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
     useStore.setState({
       projects: [],
       threads: [],
-      threadsHydrated: false,
+      bootstrapComplete: false,
     });
   });
 
   afterEach(() => {
+    customWsRpcResolver = null;
     document.body.innerHTML = "";
-  });
-
-  it("selects the newest checkpoint when the Latest diff chip is clicked", async () => {
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotWithTurnDiffCheckpoints(),
-      initialEntry: `/${THREAD_ID}?diff=1`,
-    });
-
-    try {
-      const latestTurnButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find(
-            (button) => button.textContent?.trim() === "Latest",
-          ) as HTMLButtonElement | null,
-        "Unable to find the Latest diff chip.",
-      );
-
-      await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find((button) =>
-            button.textContent?.includes("Turn 2"),
-          ) as HTMLButtonElement | null,
-        "Unable to find the grouped latest turn chip.",
-      );
-
-      expect(mounted.router.state.location.search.diffSelection).toBeUndefined();
-      expect(mounted.router.state.location.search.diffTurnId).toBeUndefined();
-
-      latestTurnButton.click();
-
-      await waitForSearch(
-        mounted.router,
-        (search) =>
-          search.diff === "1" &&
-          search.diffSelection === "latest" &&
-          search.diffTurnId === undefined,
-        "Latest diff chip should switch the diff panel into follow-latest mode.",
-      );
-
-      expect(
-        document.querySelectorAll("[data-turn-chip-selected='true']"),
-        "Latest mode should only mark a single chip as selected.",
-      ).toHaveLength(1);
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("keeps following the newest checkpoint while Latest mode is selected", async () => {
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotWithTurnDiffCheckpoints(),
-      initialEntry: `/${THREAD_ID}?diff=1&diffSelection=latest`,
-    });
-
-    try {
-      await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find(
-            (button) => button.textContent?.trim() === "Latest",
-          ) as HTMLButtonElement | null,
-        "Unable to find the initial Latest diff chip state.",
-      );
-
-      await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find((button) =>
-            button.textContent?.includes("Turn 2"),
-          ) as HTMLButtonElement | null,
-        "Unable to find the initial grouped latest turn chip.",
-      );
-
-      useStore.setState((state) =>
-        appendCheckpointToStore(state, {
-          turnId: "turn-3" as TurnId,
-          checkpointTurnCount: 3,
-          checkpointRef: "refs/t3/checkpoints/checkpoint-3",
-          completedAt: isoAt(360),
-        }),
-      );
-
-      await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find((button) =>
-            button.textContent?.includes("Turn 3"),
-          ) as HTMLButtonElement | null,
-        "Latest diff chip should update to the newest checkpoint turn.",
-      );
-
-      await waitForSearch(
-        mounted.router,
-        (search) =>
-          search.diff === "1" &&
-          search.diffSelection === "latest" &&
-          search.diffTurnId === undefined,
-        "Latest mode should keep routing state in follow-latest mode after new checkpoints arrive.",
-      );
-
-      expect(
-        document.querySelectorAll("[data-turn-chip-selected='true']"),
-        "Latest mode should still have exactly one selected chip after new checkpoints arrive.",
-      ).toHaveLength(1);
-    } finally {
-      await mounted.cleanup();
-    }
   });
 
   it.each(TEXT_VIEWPORT_MATRIX)(
@@ -1221,24 +1135,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
     },
   );
 
-  it("opens the project cwd for draft threads without a worktree path", async () => {
-    useComposerDraftStore.setState({
-      draftThreadsByThreadId: {
-        [THREAD_ID]: {
-          projectId: PROJECT_ID,
-          createdAt: NOW_ISO,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
-          branch: null,
-          worktreePath: null,
-          envMode: "local",
-        },
-      },
-      projectDraftThreadIdByProjectId: {
-        [PROJECT_ID]: THREAD_ID,
-      },
+  it("shows an explicit empty state for projects without threads in the sidebar", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
     });
+
+    try {
+      await expect.element(page.getByText("No threads yet")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the project cwd for draft threads without a worktree path", async () => {
+    setDraftThreadWithoutWorktree();
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -1270,6 +1181,153 @@ describe("ChatView timeline estimator parity (full app)", () => {
             _tag: WS_METHODS.shellOpenInEditor,
             cwd: "/repo/project",
             editor: "vscode",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the project cwd with VS Code Insiders when it is the only available editor", async () => {
+    setDraftThreadWithoutWorktree();
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          availableEditors: ["vscode-insiders"],
+        };
+      },
+    });
+
+    try {
+      const openButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Open",
+          ) as HTMLButtonElement | null,
+        "Unable to find Open button.",
+      );
+      openButton.click();
+
+      await vi.waitFor(
+        () => {
+          const openRequest = wsRequests.find(
+            (request) => request._tag === WS_METHODS.shellOpenInEditor,
+          );
+          expect(openRequest).toMatchObject({
+            _tag: WS_METHODS.shellOpenInEditor,
+            cwd: "/repo/project",
+            editor: "vscode-insiders",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("filters the open picker menu and opens VSCodium from the menu", async () => {
+    setDraftThreadWithoutWorktree();
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          availableEditors: ["vscode-insiders", "vscodium"],
+        };
+      },
+    });
+
+    try {
+      const menuButton = await waitForElement(
+        () => document.querySelector('button[aria-label="Copy options"]'),
+        "Unable to find Open picker button.",
+      );
+      (menuButton as HTMLButtonElement).click();
+
+      await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll('[data-slot="menu-item"]')).find((item) =>
+            item.textContent?.includes("VS Code Insiders"),
+          ) ?? null,
+        "Unable to find VS Code Insiders menu item.",
+      );
+
+      expect(
+        Array.from(document.querySelectorAll('[data-slot="menu-item"]')).some((item) =>
+          item.textContent?.includes("Zed"),
+        ),
+      ).toBe(false);
+
+      const vscodiumItem = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll('[data-slot="menu-item"]')).find((item) =>
+            item.textContent?.includes("VSCodium"),
+          ) ?? null,
+        "Unable to find VSCodium menu item.",
+      );
+      (vscodiumItem as HTMLElement).click();
+
+      await vi.waitFor(
+        () => {
+          const openRequest = wsRequests.find(
+            (request) => request._tag === WS_METHODS.shellOpenInEditor,
+          );
+          expect(openRequest).toMatchObject({
+            _tag: WS_METHODS.shellOpenInEditor,
+            cwd: "/repo/project",
+            editor: "vscodium",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("falls back to the first installed editor when the stored favorite is unavailable", async () => {
+    localStorage.setItem("t3code:last-editor", "vscodium");
+    setDraftThreadWithoutWorktree();
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          availableEditors: ["vscode-insiders"],
+        };
+      },
+    });
+
+    try {
+      const openButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Open",
+          ) as HTMLButtonElement | null,
+        "Unable to find Open button.",
+      );
+      openButton.click();
+
+      await vi.waitFor(
+        () => {
+          const openRequest = wsRequests.find(
+            (request) => request._tag === WS_METHODS.shellOpenInEditor,
+          );
+          expect(openRequest).toMatchObject({
+            _tag: WS_METHODS.shellOpenInEditor,
+            cwd: "/repo/project",
+            editor: "vscode-insiders",
           });
         },
         { timeout: 8_000, interval: 16 },
@@ -1411,6 +1469,155 @@ describe("ChatView timeline estimator parity (full app)", () => {
               T3CODE_PROJECT_ROOT: "/repo/project",
               T3CODE_WORKTREE_PATH: "/repo/worktrees/feature-draft",
             },
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("runs setup scripts after preparing a pull request worktree thread", async () => {
+    useComposerDraftStore.setState({
+      draftThreadsByThreadId: {
+        [THREAD_ID]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          executionEnvironmentPreference: DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [PROJECT_ID]: THREAD_ID,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withProjectScripts(createDraftOnlySnapshot(), [
+        {
+          id: "setup",
+          name: "Setup",
+          command: "bun install",
+          icon: "configure",
+          runOnWorktreeCreate: true,
+        },
+      ]),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.gitResolvePullRequest) {
+          return {
+            pullRequest: {
+              number: 1359,
+              title: "Add thread archiving and settings navigation",
+              url: "https://github.com/pingdotgg/t3code/pull/1359",
+              baseBranch: "main",
+              headBranch: "archive-settings-overhaul",
+              state: "open",
+            },
+          };
+        }
+        if (body._tag === WS_METHODS.gitPreparePullRequestThread) {
+          return {
+            pullRequest: {
+              number: 1359,
+              title: "Add thread archiving and settings navigation",
+              url: "https://github.com/pingdotgg/t3code/pull/1359",
+              baseBranch: "main",
+              headBranch: "archive-settings-overhaul",
+              state: "open",
+            },
+            branch: "archive-settings-overhaul",
+            worktreePath: "/repo/worktrees/pr-1359",
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const branchButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "main",
+          ) as HTMLButtonElement | null,
+        "Unable to find branch selector button.",
+      );
+      branchButton.click();
+
+      const branchInput = await waitForElement(
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches..."]'),
+        "Unable to find branch search input.",
+      );
+      branchInput.focus();
+      await page.getByPlaceholder("Search branches...").fill("1359");
+
+      const checkoutItem = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("span")).find(
+            (element) => element.textContent?.trim() === "Checkout Pull Request",
+          ) as HTMLSpanElement | null,
+        "Unable to find checkout pull request option.",
+      );
+      checkoutItem.click();
+
+      const worktreeButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Worktree",
+          ) as HTMLButtonElement | null,
+        "Unable to find Worktree button.",
+      );
+      worktreeButton.click();
+
+      await vi.waitFor(
+        () => {
+          const prepareRequest = wsRequests.find(
+            (request) => request._tag === WS_METHODS.gitPreparePullRequestThread,
+          );
+          expect(prepareRequest).toMatchObject({
+            _tag: WS_METHODS.gitPreparePullRequestThread,
+            cwd: "/repo/project",
+            reference: "1359",
+            mode: "worktree",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await vi.waitFor(
+        () => {
+          const openRequest = wsRequests.find(
+            (request) =>
+              request._tag === WS_METHODS.terminalOpen && request.cwd === "/repo/worktrees/pr-1359",
+          );
+          expect(openRequest).toMatchObject({
+            _tag: WS_METHODS.terminalOpen,
+            threadId: expect.any(String),
+            cwd: "/repo/worktrees/pr-1359",
+            env: {
+              T3CODE_PROJECT_ROOT: "/repo/project",
+              T3CODE_WORKTREE_PATH: "/repo/worktrees/pr-1359",
+            },
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await vi.waitFor(
+        () => {
+          const writeRequest = wsRequests.find(
+            (request) =>
+              request._tag === WS_METHODS.terminalWrite && request.data === "bun install\r",
+          );
+          expect(writeRequest).toMatchObject({
+            _tag: WS_METHODS.terminalWrite,
+            threadId: expect.any(String),
+            data: "bun install\r",
           });
         },
         { timeout: 8_000, interval: 16 },
@@ -1663,6 +1870,87 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("hides the archive action when the pointer leaves a thread row", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-archive-hover-test" as MessageId,
+        targetText: "archive hover target",
+      }),
+    });
+
+    try {
+      const threadRow = page.getByTestId(`thread-row-${THREAD_ID}`);
+
+      await expect.element(threadRow).toBeInTheDocument();
+      const archiveButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(`[data-testid="thread-archive-${THREAD_ID}"]`),
+        "Unable to find archive button.",
+      );
+      const archiveAction = archiveButton.parentElement;
+      expect(
+        archiveAction,
+        "Archive button should render inside a visibility wrapper.",
+      ).not.toBeNull();
+      expect(getComputedStyle(archiveAction!).opacity).toBe("0");
+
+      await threadRow.hover();
+      await vi.waitFor(
+        () => {
+          expect(getComputedStyle(archiveAction!).opacity).toBe("1");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      await page.getByTestId("composer-editor").hover();
+      await vi.waitFor(
+        () => {
+          expect(getComputedStyle(archiveAction!).opacity).toBe("0");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the confirm archive action after clicking the archive button", async () => {
+    localStorage.setItem(
+      "t3code:client-settings:v1",
+      JSON.stringify({
+        ...DEFAULT_CLIENT_SETTINGS,
+        confirmThreadArchive: true,
+      }),
+    );
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-archive-confirm-test" as MessageId,
+        targetText: "archive confirm target",
+      }),
+    });
+
+    try {
+      const threadRow = page.getByTestId(`thread-row-${THREAD_ID}`);
+
+      await expect.element(threadRow).toBeInTheDocument();
+      await threadRow.hover();
+
+      const archiveButton = page.getByTestId(`thread-archive-${THREAD_ID}`);
+      await expect.element(archiveButton).toBeInTheDocument();
+      await archiveButton.click();
+
+      const confirmButton = page.getByTestId(`thread-archive-confirm-${THREAD_ID}`);
+      await expect.element(confirmButton).toBeInTheDocument();
+      await expect.element(confirmButton).toBeVisible();
+    } finally {
+      localStorage.removeItem("t3code:client-settings:v1");
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the new thread selected after clicking the new-thread button", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -1690,21 +1978,16 @@ describe("ChatView timeline estimator parity (full app)", () => {
       // The composer editor should be present for the new draft thread.
       await waitForComposerEditor();
 
-      // Simulate the snapshot sync arriving from the server after the draft
-      // thread has been promoted to a server thread (thread.create + turn.start
-      // succeeded). The snapshot now includes the new thread, and the sync
-      // should clear the draft without disrupting the route.
-      const { syncServerReadModel } = useStore.getState();
-      syncServerReadModel(addThreadToSnapshot(fixture.snapshot, newThreadId));
-
-      // Clear the draft now that the server thread exists (mirrors EventRouter behavior).
-      useComposerDraftStore.getState().clearDraftThread(newThreadId);
+      // Simulate the steady-state promotion path: the server emits
+      // `thread.created`, the client materializes the thread incrementally,
+      // and the draft is cleared by live batch effects.
+      await promoteDraftThreadViaDomainEvent(newThreadId);
 
       // The route should still be on the new thread — not redirected away.
       await waitForURL(
         mounted.router,
         (path) => path === newThreadPath,
-        "New thread should remain selected after snapshot sync clears the draft.",
+        "New thread should remain selected after server thread promotion clears the draft.",
       );
 
       // The empty thread view and composer should still be visible.
@@ -2026,9 +2309,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const promotedThreadId = promotedThreadPath.slice(1) as ThreadId;
 
-      const { syncServerReadModel } = useStore.getState();
-      syncServerReadModel(addThreadToSnapshot(fixture.snapshot, promotedThreadId));
-      useComposerDraftStore.getState().clearDraftThread(promotedThreadId);
+      await promoteDraftThreadViaDomainEvent(promotedThreadId);
 
       const freshThreadPath = await triggerChatNewShortcutUntilPath(
         mounted.router,

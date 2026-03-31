@@ -141,7 +141,8 @@ export interface CodexAppServerStartSessionInput {
   readonly model?: string;
   readonly serviceTier?: string;
   readonly resumeCursor?: unknown;
-  readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
+  readonly binaryPath?: string;
+  readonly homePath?: string;
   readonly executionEnvironmentPreference?: ProviderSessionStartInput["executionEnvironmentPreference"];
   readonly runtimeMode: RuntimeMode;
 }
@@ -564,9 +565,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         updatedAt: now,
       };
 
-      const codexOptions = readCodexProviderOptions(input);
-      const codexBinaryPath = codexOptions.binaryPath ?? "codex";
-      const codexHomePath = codexOptions.homePath;
+      const codexBinaryPath = input.binaryPath ?? "codex";
+      const codexHomePath = input.homePath;
       const { hostRuntime, availableExecutionEnvironments } = await this.getRuntimeEnvironment();
       const executionEnvironment =
         input.executionEnvironmentPreference !== undefined
@@ -1638,20 +1638,6 @@ function brandIfNonEmpty<T extends string>(
 
 function normalizeProviderThreadId(value: string | undefined): string | undefined {
   return brandIfNonEmpty(value, (normalized) => normalized);
-}
-
-function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
-  readonly binaryPath?: string;
-  readonly homePath?: string;
-} {
-  const options = input.providerOptions?.codex;
-  if (!options) {
-    return {};
-  }
-  return {
-    ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
-    ...(options.homePath ? { homePath: options.homePath } : {}),
-  };
 }
 
 function assertSupportedCodexCliVersion(input: {

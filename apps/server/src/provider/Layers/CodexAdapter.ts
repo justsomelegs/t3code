@@ -32,6 +32,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   CodexAppServerManager,
   type CodexAppServerStartSessionInput,
@@ -1343,6 +1344,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         }),
     );
 
+    const serverSettingsService = yield* ServerSettingsService;
+
     const startSession: CodexAdapterShape["startSession"] = (input) => {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return Effect.fail(
@@ -1354,34 +1357,50 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         );
       }
 
-      const managerInput: CodexAppServerStartSessionInput = {
-        threadId: input.threadId,
-        provider: "codex",
-        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-        ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-        ...(input.executionEnvironmentPreference !== undefined
-          ? { executionEnvironmentPreference: input.executionEnvironmentPreference }
-          : {}),
-        runtimeMode: input.runtimeMode,
-        ...(input.modelSelection?.provider === "codex"
-          ? { model: input.modelSelection.model }
-          : {}),
-        ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
-          ? { serviceTier: "fast" }
-          : {}),
-      };
+      return Effect.gen(function* () {
+        const codexSettings = yield* serverSettingsService.getSettings.pipe(
+          Effect.map((settings) => settings.providers.codex),
+          Effect.mapError(
+            (error) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: error.message,
+                cause: error,
+              }),
+          ),
+        );
 
-      return Effect.tryPromise({
-        try: () => manager.startSession(managerInput),
-        catch: (cause) =>
-          new ProviderAdapterProcessError({
-            provider: PROVIDER,
-            threadId: input.threadId,
-            detail: toMessage(cause, "Failed to start Codex adapter session."),
-            cause,
-          }),
-      }).pipe(Effect.map((session) => session));
+        const managerInput: CodexAppServerStartSessionInput = {
+          threadId: input.threadId,
+          provider: "codex",
+          ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+          ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+          ...(input.executionEnvironmentPreference !== undefined
+            ? { executionEnvironmentPreference: input.executionEnvironmentPreference }
+            : {}),
+          binaryPath: codexSettings.binaryPath,
+          ...(codexSettings.homePath ? { homePath: codexSettings.homePath } : {}),
+          runtimeMode: input.runtimeMode,
+          ...(input.modelSelection?.provider === "codex"
+            ? { model: input.modelSelection.model }
+            : {}),
+          ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
+            ? { serviceTier: "fast" }
+            : {}),
+        };
+
+        return yield* Effect.tryPromise({
+          try: () => manager.startSession(managerInput),
+          catch: (cause) =>
+            new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+              detail: toMessage(cause, "Failed to start Codex adapter session."),
+              cause,
+            }),
+        });
+      });
     };
 
     const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>

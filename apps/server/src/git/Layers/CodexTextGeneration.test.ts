@@ -9,6 +9,7 @@ import {
   RuntimeEnvironment,
   type RuntimeEnvironmentShape,
 } from "../../runtimeEnvironment/Services/RuntimeEnvironment.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { CodexTextGenerationLive } from "./CodexTextGeneration.ts";
 import { TextGenerationError } from "../Errors.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
@@ -41,6 +42,7 @@ const defaultRuntimeEnvironmentService: RuntimeEnvironmentShape = {
 
 const CodexTextGenerationTestLayer = CodexTextGenerationLive.pipe(
   Layer.provideMerge(Layer.succeed(RuntimeEnvironment, defaultRuntimeEnvironmentService)),
+  Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(
     ServerConfig.layerTest(process.cwd(), {
       prefix: "t3code-codex-text-generation-test-",

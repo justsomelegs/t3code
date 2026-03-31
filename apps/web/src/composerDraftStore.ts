@@ -1,9 +1,9 @@
 import {
-  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
   CODEX_REASONING_EFFORT_OPTIONS,
   type ClaudeCodeEffort,
   type CodexReasoningEffort,
-  type ModelSlug,
+  DEFAULT_SERVER_EXECUTION_ENVIRONMENT_PREFERENCE,
+  DEFAULT_MODEL_BY_PROVIDER,
   ModelSelection,
   ProjectId,
   ProviderInteractionMode,
@@ -12,16 +12,13 @@ import {
   RuntimeMode,
   ServerExecutionEnvironmentPreference,
   type ServerExecutionEnvironmentPreference as ServerExecutionEnvironmentPreferenceType,
+  type ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Equal from "effect/Equal";
 import { DeepMutable } from "effect/Types";
-import {
-  getDefaultModel,
-  normalizeModelSlug,
-  resolveModelSlugForProvider,
-} from "@t3tools/shared/model";
+import { normalizeModelSlug } from "@t3tools/shared/model";
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./modelSelection";
@@ -34,6 +31,8 @@ import {
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createDebouncedStorage, createMemoryStorage } from "./lib/storage";
+import { getDefaultServerModel } from "./providerModels";
+import { UnifiedSettings } from "@t3tools/contracts/settings";
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 const COMPOSER_DRAFT_STORAGE_VERSION = 3;
@@ -89,7 +88,6 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
-  executionEnvironmentPreference: Schema.optionalKey(ServerExecutionEnvironmentPreference),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
@@ -171,7 +169,6 @@ export interface ComposerThreadDraftState {
   activeProvider: ProviderKind | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
-  executionEnvironmentPreference?: ServerExecutionEnvironmentPreferenceType | null;
 }
 
 export interface DraftThreadState {
@@ -251,10 +248,6 @@ interface ComposerDraftStoreState {
     threadId: ThreadId,
     interactionMode: ProviderInteractionMode | null | undefined,
   ) => void;
-  setExecutionEnvironmentPreference: (
-    threadId: ThreadId,
-    executionEnvironmentPreference: ServerExecutionEnvironmentPreferenceType | null | undefined,
-  ) => void;
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
   removeImage: (threadId: ThreadId, imageId: string) => void;
@@ -277,7 +270,7 @@ interface ComposerDraftStoreState {
 }
 
 export interface EffectiveComposerModelState {
-  selectedModel: ModelSlug;
+  selectedModel: string;
   modelOptions: ProviderModelOptions | null;
 }
 
@@ -334,7 +327,6 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   activeProvider: null,
   runtimeMode: null,
   interactionMode: null,
-  executionEnvironmentPreference: null,
 });
 
 function createEmptyThreadDraft(): ComposerThreadDraftState {
@@ -348,7 +340,6 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
-    executionEnvironmentPreference: null,
   };
 }
 
@@ -418,8 +409,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
-    draft.interactionMode === null &&
-    draft.executionEnvironmentPreference == null
+    draft.interactionMode === null
   );
 }
 
@@ -492,12 +482,20 @@ function normalizeProviderModelOptions(
       : claudeCandidate?.fastMode === false
         ? false
         : undefined;
+  const claudeContextWindow =
+    typeof claudeCandidate?.contextWindow === "string" && claudeCandidate.contextWindow.length > 0
+      ? claudeCandidate.contextWindow
+      : undefined;
   const claude =
-    claudeThinking !== undefined || claudeEffort !== undefined || claudeFastMode !== undefined
+    claudeThinking !== undefined ||
+    claudeEffort !== undefined ||
+    claudeFastMode !== undefined ||
+    claudeContextWindow !== undefined
       ? {
           ...(claudeThinking !== undefined ? { thinking: claudeThinking } : {}),
           ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
           ...(claudeFastMode !== undefined ? { fastMode: claudeFastMode } : {}),
+          ...(claudeContextWindow !== undefined ? { contextWindow: claudeContextWindow } : {}),
         }
       : undefined;
 
@@ -611,7 +609,7 @@ function legacyToModelSelectionByProvider(
           model:
             modelSelection?.provider === provider
               ? modelSelection.model
-              : getDefaultModel(provider),
+              : DEFAULT_MODEL_BY_PROVIDER[provider],
           options,
         };
       }
@@ -629,22 +627,23 @@ export function deriveEffectiveComposerModelState(input: {
     | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
     | null
     | undefined;
+  providers: ReadonlyArray<ServerProvider>;
   selectedProvider: ProviderKind;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
-  customModelsByProvider: Record<ProviderKind, readonly string[]>;
+  settings: UnifiedSettings;
 }): EffectiveComposerModelState {
-  const baseModel = resolveModelSlugForProvider(
-    input.selectedProvider,
-    input.threadModelSelection?.model ??
-      input.projectModelSelection?.model ??
-      getDefaultModel(input.selectedProvider),
-  );
+  const baseModel =
+    normalizeModelSlug(
+      input.threadModelSelection?.model ?? input.projectModelSelection?.model,
+      input.selectedProvider,
+    ) ?? getDefaultServerModel(input.providers, input.selectedProvider);
   const activeSelection = input.draft?.modelSelectionByProvider?.[input.selectedProvider];
   const selectedModel = activeSelection?.model
     ? resolveAppModelSelection(
         input.selectedProvider,
-        input.customModelsByProvider,
+        input.settings,
+        input.providers,
         activeSelection.model,
       )
     : baseModel;
@@ -889,11 +888,6 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
         ? draftCandidate.interactionMode
         : null;
-    const executionEnvironmentPreference = Schema.is(ServerExecutionEnvironmentPreference)(
-      draftCandidate.executionEnvironmentPreference,
-    )
-      ? draftCandidate.executionEnvironmentPreference
-      : null;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
@@ -952,8 +946,7 @@ function normalizePersistedDraftsByThreadId(
       terminalContexts.length === 0 &&
       !hasModelData &&
       !runtimeMode &&
-      !interactionMode &&
-      !executionEnvironmentPreference
+      !interactionMode
     ) {
       continue;
     }
@@ -964,7 +957,6 @@ function normalizePersistedDraftsByThreadId(
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
-      ...(executionEnvironmentPreference ? { executionEnvironmentPreference } : {}),
     };
   }
 
@@ -1033,8 +1025,7 @@ function partializeComposerDraftStoreState(
       draft.terminalContexts.length === 0 &&
       !hasModelData &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null &&
-      draft.executionEnvironmentPreference === null
+      draft.interactionMode === null
     ) {
       continue;
     }
@@ -1062,9 +1053,6 @@ function partializeComposerDraftStoreState(
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
-      ...(draft.executionEnvironmentPreference
-        ? { executionEnvironmentPreference: draft.executionEnvironmentPreference }
-        : {}),
     };
     persistedDraftsByThreadId[threadId as ThreadId] = persistedDraft;
   }
@@ -1280,7 +1268,6 @@ function toHydratedThreadDraft(
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
-    executionEnvironmentPreference: persistedDraft.executionEnvironmentPreference ?? null,
   };
 }
 
@@ -1726,7 +1713,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             if (opts) {
               nextMap[provider] = {
                 provider,
-                model: current?.model ?? getDefaultModel(provider),
+                model: current?.model ?? DEFAULT_MODEL_BY_PROVIDER[provider],
                 options: opts,
               };
             } else if (current?.options) {
@@ -1776,7 +1763,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (providerOpts) {
             nextMap[normalizedProvider] = {
               provider: normalizedProvider,
-              model: currentForProvider?.model ?? getDefaultModel(normalizedProvider),
+              model: currentForProvider?.model ?? DEFAULT_MODEL_BY_PROVIDER[normalizedProvider],
               options: providerOpts,
             };
           } else if (currentForProvider?.options) {
@@ -1794,7 +1781,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               base.modelSelectionByProvider[normalizedProvider] ??
               ({
                 provider: normalizedProvider,
-                model: getDefaultModel(normalizedProvider),
+                model: DEFAULT_MODEL_BY_PROVIDER[normalizedProvider],
               } as ModelSelection);
             if (providerOpts) {
               nextStickyMap[normalizedProvider] = {
@@ -1885,39 +1872,6 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const nextDraft: ComposerThreadDraftState = {
             ...base,
             interactionMode: nextInteractionMode,
-          };
-          const nextDraftsByThreadId = { ...state.draftsByThreadId };
-          if (shouldRemoveDraft(nextDraft)) {
-            delete nextDraftsByThreadId[threadId];
-          } else {
-            nextDraftsByThreadId[threadId] = nextDraft;
-          }
-          return { draftsByThreadId: nextDraftsByThreadId };
-        });
-      },
-      setExecutionEnvironmentPreference: (threadId, executionEnvironmentPreference) => {
-        if (threadId.length === 0) {
-          return;
-        }
-        const nextExecutionEnvironmentPreference = Schema.is(ServerExecutionEnvironmentPreference)(
-          executionEnvironmentPreference,
-        )
-          ? executionEnvironmentPreference
-          : null;
-        set((state) => {
-          const existing = state.draftsByThreadId[threadId];
-          if (!existing && nextExecutionEnvironmentPreference === null) {
-            return state;
-          }
-          const base = existing ?? createEmptyThreadDraft();
-          if (
-            Equal.equals(base.executionEnvironmentPreference, nextExecutionEnvironmentPreference)
-          ) {
-            return state;
-          }
-          const nextDraft: ComposerThreadDraftState = {
-            ...base,
-            executionEnvironmentPreference: nextExecutionEnvironmentPreference,
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };
           if (shouldRemoveDraft(nextDraft)) {
@@ -2240,10 +2194,11 @@ export function useComposerThreadDraft(threadId: ThreadId): ComposerThreadDraftS
 
 export function useEffectiveComposerModelState(input: {
   threadId: ThreadId;
+  providers: ReadonlyArray<ServerProvider>;
   selectedProvider: ProviderKind;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
-  customModelsByProvider: Record<ProviderKind, readonly string[]>;
+  settings: UnifiedSettings;
 }): EffectiveComposerModelState {
   const draft = useComposerThreadDraft(input.threadId);
 
@@ -2251,14 +2206,16 @@ export function useEffectiveComposerModelState(input: {
     () =>
       deriveEffectiveComposerModelState({
         draft,
+        providers: input.providers,
         selectedProvider: input.selectedProvider,
         threadModelSelection: input.threadModelSelection,
         projectModelSelection: input.projectModelSelection,
-        customModelsByProvider: input.customModelsByProvider,
+        settings: input.settings,
       }),
     [
       draft,
-      input.customModelsByProvider,
+      input.providers,
+      input.settings,
       input.projectModelSelection,
       input.selectedProvider,
       input.threadModelSelection,
@@ -2267,18 +2224,21 @@ export function useEffectiveComposerModelState(input: {
 }
 
 /**
- * Clear draft threads that have been promoted to server threads.
+ * Clear a draft thread once the server has materialized the same thread id.
  *
- * Call this after a snapshot sync so the route guard in `_chat.$threadId`
- * sees the server thread before the draft is removed — avoids a redirect
- * to `/` caused by a gap where neither draft nor server thread exists.
+ * Use the single-thread helper for live `thread.created` events and the
+ * iterable helper for bootstrap/recovery paths that discover multiple server
+ * threads at once.
  */
-export function clearPromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>): void {
-  const store = useComposerDraftStore.getState();
-  const draftThreadIds = Object.keys(store.draftThreadsByThreadId) as ThreadId[];
-  for (const draftId of draftThreadIds) {
-    if (serverThreadIds.has(draftId)) {
-      store.clearDraftThread(draftId);
-    }
+export function clearPromotedDraftThread(threadId: ThreadId): void {
+  if (!useComposerDraftStore.getState().getDraftThread(threadId)) {
+    return;
+  }
+  useComposerDraftStore.getState().clearDraftThread(threadId);
+}
+
+export function clearPromotedDraftThreads(serverThreadIds: Iterable<ThreadId>): void {
+  for (const threadId of serverThreadIds) {
+    clearPromotedDraftThread(threadId);
   }
 }
