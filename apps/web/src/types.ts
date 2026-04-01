@@ -109,6 +109,9 @@ export interface Thread {
   worktreePath: string | null;
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
+  latestUserMessageAt?: string | null;
+  pendingApprovalCount?: number | undefined;
+  pendingUserInputCount?: number | undefined;
 }
 
 export interface SidebarThreadSummary {

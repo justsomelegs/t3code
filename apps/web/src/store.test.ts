@@ -248,6 +248,79 @@ describe("store read model sync", () => {
     expect(next.threads[0]?.archivedAt).toBe(archivedAt);
   });
 
+  it("projects sidebar metadata from snapshot threads", () => {
+    const initialState = makeState(makeThread());
+    const next = syncServerReadModel(
+      initialState,
+      makeReadModel(
+        makeReadModelThread({
+          messages: [
+            {
+              id: MessageId.makeUnsafe("assistant-1"),
+              role: "assistant",
+              text: "hello",
+              turnId: null,
+              createdAt: "2026-02-27T00:00:01.000Z",
+              updatedAt: "2026-02-27T00:00:01.000Z",
+              streaming: false,
+            },
+            {
+              id: MessageId.makeUnsafe("user-1"),
+              role: "user",
+              text: "latest user",
+              turnId: null,
+              createdAt: "2026-02-27T00:00:02.000Z",
+              updatedAt: "2026-02-27T00:00:02.000Z",
+              streaming: false,
+            },
+          ],
+          activities: [
+            {
+              id: EventId.makeUnsafe("approval-open"),
+              kind: "approval.requested",
+              summary: "Approval requested",
+              tone: "approval",
+              payload: {
+                requestId: "req-approval",
+                requestKind: "command",
+              },
+              turnId: null,
+              createdAt: "2026-02-27T00:00:03.000Z",
+            },
+            {
+              id: EventId.makeUnsafe("user-input-open"),
+              kind: "user-input.requested",
+              summary: "Input requested",
+              tone: "info",
+              payload: {
+                requestId: "req-input",
+                questions: [
+                  {
+                    id: "sandbox_mode",
+                    header: "Sandbox",
+                    question: "Which mode should be used?",
+                    options: [
+                      {
+                        label: "workspace-write",
+                        description: "Allow workspace writes only",
+                      },
+                    ],
+                  },
+                ],
+              },
+              turnId: null,
+              createdAt: "2026-02-27T00:00:04.000Z",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.latestUserMessageAt).toBe("2026-02-27T00:00:02.000Z");
+    expect(next.threads[0]?.pendingApprovalCount).toBe(1);
+    expect(next.threads[0]?.pendingUserInputCount).toBe(1);
+  });
+
   it("replaces projects using snapshot order during recovery", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
@@ -497,6 +570,112 @@ describe("incremental orchestration updates", () => {
     expect(next.threads[0]?.messages[0]?.text).toBe("hello world");
     expect(next.threads[0]?.latestTurn?.state).toBe("running");
     expect(next.threads[1]).toBe(thread2);
+  });
+
+  it("updates projected sidebar metadata for user messages and pending requests", () => {
+    const thread = makeThread();
+    const state = makeState(thread);
+
+    const withUserMessage = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.message-sent", {
+        threadId: thread.id,
+        messageId: MessageId.makeUnsafe("user-1"),
+        role: "user",
+        text: "hello",
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-02-27T00:00:01.000Z",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      }),
+    );
+
+    expect(withUserMessage.threads[0]?.latestUserMessageAt).toBe("2026-02-27T00:00:01.000Z");
+
+    const withPendingRequests = applyOrchestrationEvents(withUserMessage, [
+      makeEvent("thread.activity-appended", {
+        threadId: thread.id,
+        activity: {
+          id: EventId.makeUnsafe("approval-open"),
+          kind: "approval.requested",
+          summary: "Approval requested",
+          tone: "approval",
+          payload: {
+            requestId: "req-approval",
+            requestKind: "command",
+          },
+          turnId: null,
+          createdAt: "2026-02-27T00:00:02.000Z",
+        },
+      }),
+      makeEvent("thread.activity-appended", {
+        threadId: thread.id,
+        activity: {
+          id: EventId.makeUnsafe("user-input-open"),
+          kind: "user-input.requested",
+          summary: "Input requested",
+          tone: "info",
+          payload: {
+            requestId: "req-input",
+            questions: [
+              {
+                id: "sandbox_mode",
+                header: "Sandbox",
+                question: "Which mode should be used?",
+                options: [
+                  {
+                    label: "workspace-write",
+                    description: "Allow workspace writes only",
+                  },
+                ],
+              },
+            ],
+          },
+          turnId: null,
+          createdAt: "2026-02-27T00:00:03.000Z",
+        },
+      }),
+    ]);
+
+    expect(withPendingRequests.threads[0]?.pendingApprovalCount).toBe(1);
+    expect(withPendingRequests.threads[0]?.pendingUserInputCount).toBe(1);
+
+    const resolvedPendingRequests = applyOrchestrationEvents(withPendingRequests, [
+      makeEvent("thread.activity-appended", {
+        threadId: thread.id,
+        activity: {
+          id: EventId.makeUnsafe("approval-resolved"),
+          kind: "approval.resolved",
+          summary: "Approval resolved",
+          tone: "info",
+          payload: {
+            requestId: "req-approval",
+          },
+          turnId: null,
+          createdAt: "2026-02-27T00:00:04.000Z",
+        },
+      }),
+      makeEvent("thread.activity-appended", {
+        threadId: thread.id,
+        activity: {
+          id: EventId.makeUnsafe("user-input-resolved"),
+          kind: "user-input.resolved",
+          summary: "Input resolved",
+          tone: "info",
+          payload: {
+            requestId: "req-input",
+            answers: {
+              sandbox_mode: "workspace-write",
+            },
+          },
+          turnId: null,
+          createdAt: "2026-02-27T00:00:05.000Z",
+        },
+      }),
+    ]);
+
+    expect(resolvedPendingRequests.threads[0]?.pendingApprovalCount).toBe(0);
+    expect(resolvedPendingRequests.threads[0]?.pendingUserInputCount).toBe(0);
   });
 
   it("applies replay batches in sequence and updates session state", () => {

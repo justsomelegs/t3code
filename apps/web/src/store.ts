@@ -46,6 +46,51 @@ const EMPTY_THREAD_IDS: ThreadId[] = [];
 
 // ── Pure helpers ──────────────────────────────────────────────────────
 
+function deriveLatestUserMessageAt(messages: ReadonlyArray<ChatMessage>): string | null {
+  let latestUserMessageAt: string | null = null;
+
+  for (const message of messages) {
+    if (message.role !== "user") {
+      continue;
+    }
+    if (latestUserMessageAt === null || message.createdAt > latestUserMessageAt) {
+      latestUserMessageAt = message.createdAt;
+    }
+  }
+
+  return latestUserMessageAt;
+}
+
+function derivePendingRequestCounts(
+  activities: ReadonlyArray<Thread["activities"][number]>,
+): Pick<Thread, "pendingApprovalCount" | "pendingUserInputCount"> {
+  return {
+    pendingApprovalCount: derivePendingApprovals(activities).length,
+    pendingUserInputCount: derivePendingUserInputs(activities).length,
+  };
+}
+
+function resolveNextLatestUserMessageAt(input: {
+  previous: Thread["latestUserMessageAt"];
+  nextMessage: ChatMessage;
+  nextMessages: ReadonlyArray<ChatMessage>;
+  didTrimMessages: boolean;
+}): string | null {
+  if (input.nextMessage.role === "user") {
+    const previous = input.previous ?? null;
+    if (previous === null || input.nextMessage.createdAt > previous) {
+      return input.nextMessage.createdAt;
+    }
+    return previous;
+  }
+
+  if (input.didTrimMessages || input.previous === undefined) {
+    return deriveLatestUserMessageAt(input.nextMessages);
+  }
+
+  return input.previous ?? null;
+}
+
 function updateThread(
   threads: Thread[],
   threadId: ThreadId,
@@ -154,6 +199,8 @@ function mapTurnDiffSummary(
 }
 
 function mapThread(thread: OrchestrationThread): Thread {
+  const messages = thread.messages.map(mapMessage);
+  const activities = thread.activities.map((activity) => ({ ...activity }));
   return {
     id: thread.id,
     codexThreadId: null,
@@ -163,7 +210,7 @@ function mapThread(thread: OrchestrationThread): Thread {
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
     session: thread.session ? mapSession(thread.session) : null,
-    messages: thread.messages.map(mapMessage),
+    messages,
     proposedPlans: thread.proposedPlans.map(mapProposedPlan),
     error: thread.session?.lastError ?? null,
     createdAt: thread.createdAt,
@@ -174,7 +221,9 @@ function mapThread(thread: OrchestrationThread): Thread {
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     turnDiffSummaries: thread.checkpoints.map(mapTurnDiffSummary),
-    activities: thread.activities.map((activity) => ({ ...activity })),
+    activities,
+    latestUserMessageAt: deriveLatestUserMessageAt(messages),
+    ...derivePendingRequestCounts(activities),
   };
 }
 
@@ -840,7 +889,14 @@ export function applyOrchestrationEvent(state: AppState, event: OrchestrationEve
                   },
             )
           : [...thread.messages, message];
+        const didTrimMessages = messages.length > MAX_THREAD_MESSAGES;
         const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
+        const latestUserMessageAt = resolveNextLatestUserMessageAt({
+          previous: thread.latestUserMessageAt,
+          nextMessage: message,
+          nextMessages: cappedMessages,
+          didTrimMessages,
+        });
         const turnDiffSummaries =
           event.payload.role === "assistant" && event.payload.turnId !== null
             ? rebindTurnDiffSummariesForAssistantMessage(
@@ -883,6 +939,7 @@ export function applyOrchestrationEvent(state: AppState, event: OrchestrationEve
         return {
           ...thread,
           messages: cappedMessages,
+          latestUserMessageAt,
           turnDiffSummaries,
           latestTurn,
           updatedAt: event.occurredAt,
@@ -1033,14 +1090,17 @@ export function applyOrchestrationEvent(state: AppState, event: OrchestrationEve
           retainedTurnIds,
         ).slice(-MAX_THREAD_PROPOSED_PLANS);
         const activities = retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds);
+        const pendingRequestCounts = derivePendingRequestCounts(activities);
         const latestCheckpoint = turnDiffSummaries.at(-1) ?? null;
 
         return {
           ...thread,
           turnDiffSummaries,
           messages,
+          latestUserMessageAt: deriveLatestUserMessageAt(messages),
           proposedPlans,
           activities,
+          ...pendingRequestCounts,
           pendingSourceProposedPlan: undefined,
           latestTurn:
             latestCheckpoint === null
@@ -1068,9 +1128,11 @@ export function applyOrchestrationEvent(state: AppState, event: OrchestrationEve
         ]
           .toSorted(compareActivities)
           .slice(-MAX_THREAD_ACTIVITIES);
+        const pendingRequestCounts = derivePendingRequestCounts(activities);
         return {
           ...thread,
           activities,
+          ...pendingRequestCounts,
           updatedAt: event.occurredAt,
         };
       });
