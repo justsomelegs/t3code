@@ -147,7 +147,7 @@ function keybindingFromEvent(event: KeyboardEvent<HTMLInputElement>): string | n
   return parts.join("+");
 }
 
-export default function ProjectScriptsControl({
+const ProjectScriptsControl = React.memo(function ProjectScriptsControl({
   scripts,
   keybindings,
   preferredScriptId = null,
@@ -502,4 +502,6 @@ export default function ProjectScriptsControl({
       </AlertDialog>
     </>
   );
-}
+});
+
+export default ProjectScriptsControl;

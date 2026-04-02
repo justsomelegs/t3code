@@ -254,7 +254,7 @@ export interface LocalDispatchSnapshot {
 }
 
 export function createLocalDispatchSnapshot(
-  activeThread: Thread | undefined,
+  activeThread: (Pick<Thread, "latestTurn" | "session"> & Partial<Thread>) | undefined,
   options?: { preparingWorktree?: boolean },
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;

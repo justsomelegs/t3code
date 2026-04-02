@@ -47,6 +47,7 @@ describe("MessagesTimeline", () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
+        threadId={"thread-1" as never}
         hasMessages
         isWorking={false}
         activeTurnInProgress={false}
@@ -77,7 +78,6 @@ describe("MessagesTimeline", () => {
         completionDividerBeforeEntryId={null}
         completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
         onToggleWorkGroup={() => {}}
         onOpenTurnDiff={() => {}}
@@ -101,6 +101,7 @@ describe("MessagesTimeline", () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
+        threadId={"thread-1" as never}
         hasMessages
         isWorking={false}
         activeTurnInProgress={false}
@@ -122,7 +123,6 @@ describe("MessagesTimeline", () => {
         completionDividerBeforeEntryId={null}
         completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
         onToggleWorkGroup={() => {}}
         onOpenTurnDiff={() => {}}

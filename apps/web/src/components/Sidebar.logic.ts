@@ -1,8 +1,7 @@
 import * as React from "react";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
-import type { SidebarThreadSummary, Thread } from "../types";
+import type { Thread } from "../types";
 import { cn } from "../lib/utils";
-import { isLatestTurnSettled } from "../session-logic";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -42,16 +41,10 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   Completed: 1,
 };
 
-type ThreadStatusInput = Pick<
-  SidebarThreadSummary,
-  | "hasActionableProposedPlan"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "interactionMode"
-  | "latestTurn"
-  | "session"
-> & {
+type ThreadStatusInput = Pick<Thread, "interactionMode" | "session"> & {
+  hasActionableLatestProposedPlan?: boolean | undefined;
   lastVisitedAt?: string | undefined;
+  latestTurnCompletedAt?: string | null | undefined;
 };
 
 export interface ThreadJumpHintVisibilityController {
@@ -140,8 +133,8 @@ export function useThreadJumpHintVisibility(): {
 }
 
 export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
-  if (!thread.latestTurn?.completedAt) return false;
-  const completedAt = Date.parse(thread.latestTurn.completedAt);
+  if (!thread.latestTurnCompletedAt) return false;
+  const completedAt = Date.parse(thread.latestTurnCompletedAt);
   if (Number.isNaN(completedAt)) return false;
   if (!thread.lastVisitedAt) return true;
 
@@ -160,46 +153,6 @@ export function resolveSidebarNewThreadEnvMode(input: {
   defaultEnvMode: SidebarNewThreadEnvMode;
 }): SidebarNewThreadEnvMode {
   return input.requestedEnvMode ?? input.defaultEnvMode;
-}
-
-export function resolveSidebarNewThreadSeedContext(input: {
-  projectId: string;
-  defaultEnvMode: SidebarNewThreadEnvMode;
-  activeThread?: {
-    projectId: string;
-    branch: string | null;
-    worktreePath: string | null;
-  } | null;
-  activeDraftThread?: {
-    projectId: string;
-    branch: string | null;
-    worktreePath: string | null;
-    envMode: SidebarNewThreadEnvMode;
-  } | null;
-}): {
-  branch?: string | null;
-  worktreePath?: string | null;
-  envMode: SidebarNewThreadEnvMode;
-} {
-  if (input.activeDraftThread?.projectId === input.projectId) {
-    return {
-      branch: input.activeDraftThread.branch,
-      worktreePath: input.activeDraftThread.worktreePath,
-      envMode: input.activeDraftThread.envMode,
-    };
-  }
-
-  if (input.activeThread?.projectId === input.projectId) {
-    return {
-      branch: input.activeThread.branch,
-      worktreePath: input.activeThread.worktreePath,
-      envMode: input.activeThread.worktreePath ? "worktree" : "local",
-    };
-  }
-
-  return {
-    envMode: input.defaultEnvMode,
-  };
 }
 
 export function orderItemsByPreferredIds<TItem, TId>(input: {
@@ -233,11 +186,15 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
 export function getVisibleSidebarThreadIds<TThreadId>(
   renderedProjects: readonly {
     shouldShowThreadPanel?: boolean;
-    renderedThreadIds: readonly TThreadId[];
+    renderedThreads: readonly {
+      id: TThreadId;
+    }[];
   }[],
 ): TThreadId[] {
   return renderedProjects.flatMap((renderedProject) =>
-    renderedProject.shouldShowThreadPanel === false ? [] : renderedProject.renderedThreadIds,
+    renderedProject.shouldShowThreadPanel === false
+      ? []
+      : renderedProject.renderedThreads.map((thread) => thread.id),
   );
 }
 
@@ -310,10 +267,12 @@ export function resolveThreadRowClassName(input: {
 
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
+  hasPendingApprovals: boolean;
+  hasPendingUserInput: boolean;
 }): ThreadStatusPill | null {
-  const { thread } = input;
+  const { hasPendingApprovals, hasPendingUserInput, thread } = input;
 
-  if (thread.hasPendingApprovals) {
+  if (hasPendingApprovals) {
     return {
       label: "Pending Approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
@@ -322,7 +281,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.hasPendingUserInput) {
+  if (hasPendingUserInput) {
     return {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
@@ -350,10 +309,9 @@ export function resolveThreadStatusPill(input: {
   }
 
   const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
+    !hasPendingUserInput &&
     thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
+    (thread.hasActionableLatestProposedPlan ?? false);
   if (hasPlanReadyPrompt) {
     return {
       label: "Plan Ready",

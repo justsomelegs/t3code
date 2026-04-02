@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import {
+  memo,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
@@ -768,7 +769,7 @@ function TerminalActionButton({ label, className, onClick, children }: TerminalA
   );
 }
 
-export default function ThreadTerminalDrawer({
+export default memo(function ThreadTerminalDrawer({
   threadId,
   cwd,
   runtimeEnv,
@@ -1257,4 +1258,4 @@ export default function ThreadTerminalDrawer({
       </div>
     </aside>
   );
-}
+});

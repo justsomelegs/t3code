@@ -2163,6 +2163,10 @@ export function useComposerThreadDraft(threadId: ThreadId): ComposerThreadDraftS
   return useComposerDraftStore((state) => state.draftsByThreadId[threadId] ?? EMPTY_THREAD_DRAFT);
 }
 
+export function getComposerThreadDraftSnapshot(threadId: ThreadId): ComposerThreadDraftState {
+  return useComposerDraftStore.getState().draftsByThreadId[threadId] ?? EMPTY_THREAD_DRAFT;
+}
+
 export function useEffectiveComposerModelState(input: {
   threadId: ThreadId;
   providers: ReadonlyArray<ServerProvider>;

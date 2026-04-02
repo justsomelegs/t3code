@@ -11,7 +11,6 @@ import {
   isContextMenuPointerDown,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
-  resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
@@ -46,11 +45,8 @@ describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {
     expect(
       hasUnseenCompletion({
-        hasActionableProposedPlan: false,
-        hasPendingApprovals: false,
-        hasPendingUserInput: false,
         interactionMode: "default",
-        latestTurn: makeLatestTurn(),
+        latestTurnCompletedAt: makeLatestTurn().completedAt,
         lastVisitedAt: "2026-03-09T10:04:00.000Z",
         session: null,
       }),
@@ -167,68 +163,6 @@ describe("resolveSidebarNewThreadEnvMode", () => {
   });
 });
 
-describe("resolveSidebarNewThreadSeedContext", () => {
-  it("inherits the active server thread context when creating a new thread in the same project", () => {
-    expect(
-      resolveSidebarNewThreadSeedContext({
-        projectId: "project-1",
-        defaultEnvMode: "local",
-        activeThread: {
-          projectId: "project-1",
-          branch: "effect-atom",
-          worktreePath: null,
-        },
-        activeDraftThread: null,
-      }),
-    ).toEqual({
-      branch: "effect-atom",
-      worktreePath: null,
-      envMode: "local",
-    });
-  });
-
-  it("prefers the active draft thread context when it matches the target project", () => {
-    expect(
-      resolveSidebarNewThreadSeedContext({
-        projectId: "project-1",
-        defaultEnvMode: "local",
-        activeThread: {
-          projectId: "project-1",
-          branch: "effect-atom",
-          worktreePath: null,
-        },
-        activeDraftThread: {
-          projectId: "project-1",
-          branch: "feature/new-draft",
-          worktreePath: "/repo/worktree",
-          envMode: "worktree",
-        },
-      }),
-    ).toEqual({
-      branch: "feature/new-draft",
-      worktreePath: "/repo/worktree",
-      envMode: "worktree",
-    });
-  });
-
-  it("falls back to the default env mode when there is no matching active thread context", () => {
-    expect(
-      resolveSidebarNewThreadSeedContext({
-        projectId: "project-2",
-        defaultEnvMode: "worktree",
-        activeThread: {
-          projectId: "project-1",
-          branch: "effect-atom",
-          worktreePath: null,
-        },
-        activeDraftThread: null,
-      }),
-    ).toEqual({
-      envMode: "worktree",
-    });
-  });
-});
-
 describe("orderItemsByPreferredIds", () => {
   it("keeps preferred ids first, skips stale ids, and preserves the relative order of remaining items", () => {
     const ordered = orderItemsByPreferredIds({
@@ -324,14 +258,17 @@ describe("getVisibleSidebarThreadIds", () => {
     expect(
       getVisibleSidebarThreadIds([
         {
-          renderedThreadIds: [
-            ThreadId.makeUnsafe("thread-12"),
-            ThreadId.makeUnsafe("thread-11"),
-            ThreadId.makeUnsafe("thread-10"),
+          renderedThreads: [
+            { id: ThreadId.makeUnsafe("thread-12") },
+            { id: ThreadId.makeUnsafe("thread-11") },
+            { id: ThreadId.makeUnsafe("thread-10") },
           ],
         },
         {
-          renderedThreadIds: [ThreadId.makeUnsafe("thread-8"), ThreadId.makeUnsafe("thread-6")],
+          renderedThreads: [
+            { id: ThreadId.makeUnsafe("thread-8") },
+            { id: ThreadId.makeUnsafe("thread-6") },
+          ],
         },
       ]),
     ).toEqual([
@@ -348,14 +285,17 @@ describe("getVisibleSidebarThreadIds", () => {
       getVisibleSidebarThreadIds([
         {
           shouldShowThreadPanel: false,
-          renderedThreadIds: [
-            ThreadId.makeUnsafe("thread-hidden-2"),
-            ThreadId.makeUnsafe("thread-hidden-1"),
+          renderedThreads: [
+            { id: ThreadId.makeUnsafe("thread-hidden-2") },
+            { id: ThreadId.makeUnsafe("thread-hidden-1") },
           ],
         },
         {
           shouldShowThreadPanel: true,
-          renderedThreadIds: [ThreadId.makeUnsafe("thread-12"), ThreadId.makeUnsafe("thread-11")],
+          renderedThreads: [
+            { id: ThreadId.makeUnsafe("thread-12") },
+            { id: ThreadId.makeUnsafe("thread-11") },
+          ],
         },
       ]),
     ).toEqual([ThreadId.makeUnsafe("thread-12"), ThreadId.makeUnsafe("thread-11")]);
@@ -396,11 +336,9 @@ describe("isContextMenuPointerDown", () => {
 
 describe("resolveThreadStatusPill", () => {
   const baseThread = {
-    hasActionableProposedPlan: false,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
+    hasActionableLatestProposedPlan: false,
     interactionMode: "plan" as const,
-    latestTurn: null,
+    latestTurnCompletedAt: null,
     lastVisitedAt: undefined,
     session: {
       provider: "codex" as const,
@@ -414,11 +352,9 @@ describe("resolveThreadStatusPill", () => {
   it("shows pending approval before all other statuses", () => {
     expect(
       resolveThreadStatusPill({
-        thread: {
-          ...baseThread,
-          hasPendingApprovals: true,
-          hasPendingUserInput: true,
-        },
+        thread: baseThread,
+        hasPendingApprovals: true,
+        hasPendingUserInput: true,
       }),
     ).toMatchObject({ label: "Pending Approval", pulse: false });
   });
@@ -426,10 +362,9 @@ describe("resolveThreadStatusPill", () => {
   it("shows awaiting input when plan mode is blocked on user answers", () => {
     expect(
       resolveThreadStatusPill({
-        thread: {
-          ...baseThread,
-          hasPendingUserInput: true,
-        },
+        thread: baseThread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: true,
       }),
     ).toMatchObject({ label: "Awaiting Input", pulse: false });
   });
@@ -438,6 +373,8 @@ describe("resolveThreadStatusPill", () => {
     expect(
       resolveThreadStatusPill({
         thread: baseThread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
       }),
     ).toMatchObject({ label: "Working", pulse: true });
   });
@@ -447,14 +384,16 @@ describe("resolveThreadStatusPill", () => {
       resolveThreadStatusPill({
         thread: {
           ...baseThread,
-          hasActionableProposedPlan: true,
-          latestTurn: makeLatestTurn(),
+          hasActionableLatestProposedPlan: true,
+          latestTurnCompletedAt: makeLatestTurn().completedAt,
           session: {
             ...baseThread.session,
             status: "ready",
             orchestrationStatus: "ready",
           },
         },
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
       }),
     ).toMatchObject({ label: "Plan Ready", pulse: false });
   });
@@ -464,13 +403,16 @@ describe("resolveThreadStatusPill", () => {
       resolveThreadStatusPill({
         thread: {
           ...baseThread,
-          latestTurn: makeLatestTurn(),
+          hasActionableLatestProposedPlan: false,
+          latestTurnCompletedAt: makeLatestTurn().completedAt,
           session: {
             ...baseThread.session,
             status: "ready",
             orchestrationStatus: "ready",
           },
         },
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
       }),
     ).toMatchObject({ label: "Completed", pulse: false });
   });
@@ -481,7 +423,7 @@ describe("resolveThreadStatusPill", () => {
         thread: {
           ...baseThread,
           interactionMode: "default",
-          latestTurn: makeLatestTurn(),
+          latestTurnCompletedAt: makeLatestTurn().completedAt,
           lastVisitedAt: "2026-03-09T10:04:00.000Z",
           session: {
             ...baseThread.session,
@@ -489,6 +431,8 @@ describe("resolveThreadStatusPill", () => {
             orchestrationStatus: "ready",
           },
         },
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
       }),
     ).toMatchObject({ label: "Completed", pulse: false });
   });

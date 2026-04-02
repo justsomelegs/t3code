@@ -403,6 +403,19 @@ function buildLatestTurn(params: {
     params.previous?.turnId === params.turnId
       ? params.previous.sourceProposedPlan
       : params.sourceProposedPlan;
+  if (
+    params.previous?.turnId === params.turnId &&
+    params.previous.state === params.state &&
+    params.previous.requestedAt === params.requestedAt &&
+    params.previous.startedAt === params.startedAt &&
+    params.previous.completedAt === params.completedAt &&
+    params.previous.assistantMessageId === params.assistantMessageId &&
+    params.previous.sourceProposedPlan?.planId === resolvedPlan?.planId &&
+    params.previous.sourceProposedPlan?.threadId === resolvedPlan?.threadId
+  ) {
+    return params.previous;
+  }
+
   return {
     turnId: params.turnId,
     state: params.state,

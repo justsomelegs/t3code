@@ -1,12 +1,12 @@
 import type { ThreadId } from "@t3tools/contracts";
 import { FolderIcon, GitForkIcon } from "lucide-react";
-import { useCallback } from "react";
+import { memo, useCallback, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { newCommandId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
-import { useStore } from "../store";
-import { useProjectById, useThreadById } from "../storeSelectors";
+import { selectProjectById, selectThreadById, useStore } from "../store";
 import {
   EnvMode,
   resolveDraftEnvModeAfterBranchChange,
@@ -28,7 +28,7 @@ interface BranchToolbarProps {
   onComposerFocusRequest?: () => void;
 }
 
-export default function BranchToolbar({
+export default memo(function BranchToolbar({
   threadId,
   onEnvModeChange,
   envLocked,
@@ -36,17 +36,48 @@ export default function BranchToolbar({
   onComposerFocusRequest,
 }: BranchToolbarProps) {
   const setThreadBranchAction = useStore((store) => store.setThreadBranch);
-  const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
+  const draftThread = useComposerDraftStore(
+    useShallow((store) => {
+      const draft = store.getDraftThread(threadId);
+      if (!draft) {
+        return null;
+      }
+      return {
+        projectId: draft.projectId,
+        branch: draft.branch,
+        worktreePath: draft.worktreePath,
+        envMode: draft.envMode,
+      };
+    }),
+  );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-
-  const serverThread = useThreadById(threadId);
+  const serverThread = useStore(
+    useShallow((state) => {
+      const thread = selectThreadById(threadId)(state);
+      if (!thread) {
+        return null;
+      }
+      return {
+        id: thread.id,
+        projectId: thread.projectId,
+        branch: thread.branch,
+        worktreePath: thread.worktreePath,
+        session: thread.session,
+      };
+    }),
+  );
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
-  const activeProject = useProjectById(activeProjectId);
+  const activeProjectCwd = useStore(
+    useMemo(
+      () => (state) => selectProjectById(activeProjectId)(state)?.cwd ?? null,
+      [activeProjectId],
+    ),
+  );
   const activeThreadId = serverThread?.id ?? (draftThread ? threadId : undefined);
   const activeThreadBranch = serverThread?.branch ?? draftThread?.branch ?? null;
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
-  const branchCwd = activeWorktreePath ?? activeProject?.cwd ?? null;
-  const hasServerThread = serverThread !== undefined;
+  const branchCwd = activeWorktreePath ?? activeProjectCwd;
+  const hasServerThread = serverThread !== null;
   const effectiveEnvMode = resolveEffectiveEnvMode({
     activeWorktreePath,
     hasServerThread,
@@ -105,7 +136,7 @@ export default function BranchToolbar({
     ],
   );
 
-  if (!activeThreadId || !activeProject) return null;
+  if (!activeThreadId || !activeProjectCwd) return null;
 
   return (
     <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-5 pb-3 pt-1">
@@ -155,7 +186,7 @@ export default function BranchToolbar({
       )}
 
       <BranchToolbarBranchSelector
-        activeProjectCwd={activeProject.cwd}
+        activeProjectCwd={activeProjectCwd}
         activeThreadBranch={activeThreadBranch}
         activeWorktreePath={activeWorktreePath}
         branchCwd={branchCwd}
@@ -167,4 +198,4 @@ export default function BranchToolbar({
       />
     </div>
   );
-}
+});
