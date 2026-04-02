@@ -21,7 +21,7 @@ function ChatRouteGlobalShortcuts() {
       ? selectThreadTerminalState(state.terminalStateByThreadId, routeThreadId).terminalOpen
       : false,
   );
-  const appSettings = useSettings();
+  const defaultThreadEnvMode = useSettings((settings) => settings.defaultThreadEnvMode);
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
@@ -48,7 +48,7 @@ function ChatRouteGlobalShortcuts() {
         event.stopPropagation();
         void handleNewThread(projectId, {
           envMode: resolveSidebarNewThreadEnvMode({
-            defaultEnvMode: appSettings.defaultThreadEnvMode,
+            defaultEnvMode: defaultThreadEnvMode,
           }),
         });
         return;
@@ -78,9 +78,9 @@ function ChatRouteGlobalShortcuts() {
     handleNewThread,
     keybindings,
     defaultProjectId,
+    defaultThreadEnvMode,
     selectedThreadIdsSize,
     terminalOpen,
-    appSettings.defaultThreadEnvMode,
   ]);
 
   return null;

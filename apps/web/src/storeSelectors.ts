@@ -1,6 +1,7 @@
 import { type ThreadId } from "@t3tools/contracts";
 import { useMemo } from "react";
 import {
+  type AppState,
   selectProjectById,
   selectSidebarThreadSummaryById,
   selectThreadById,
@@ -22,5 +23,14 @@ export function useSidebarThreadSummaryById(
   threadId: ThreadId | null | undefined,
 ): SidebarThreadSummary | undefined {
   const selector = useMemo(() => selectSidebarThreadSummaryById(threadId), [threadId]);
+  return useStore(selector);
+}
+
+export function useThreadExists(threadId: ThreadId | null | undefined): boolean {
+  const selector = useMemo(
+    () => (state: AppState) =>
+      threadId ? state.threads.some((thread) => thread.id === threadId) : false,
+    [threadId],
+  );
   return useStore(selector);
 }
