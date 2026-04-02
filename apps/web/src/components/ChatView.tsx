@@ -41,7 +41,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import { gitCreateWorktreeMutationOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
@@ -542,7 +542,7 @@ const ChatHeaderPane = memo(function ChatHeaderPane(props: {
         worktreePath: threadSelection?.worktreePath ?? null,
       })
     : null;
-  const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
+  const branchesQuery = useQuery(gitStatusQueryOptions(gitCwd));
   const isGitRepo = branchesQuery.data?.isRepo ?? true;
 
   if (!threadSelection) {
@@ -2911,7 +2911,7 @@ const ChatView = memo(function ChatView({ threadId }: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
-  const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
+  const branchesQuery = useQuery(gitStatusQueryOptions(gitCwd));
   const keybindings = useServerKeybindings();
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,

@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { MessageId, type TurnId } from "@t3tools/contracts";
+import { MessageId, ThreadId, type TurnId } from "@t3tools/contracts";
 import { page } from "vitest/browser";
 import { useCallback, useState, type ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -145,6 +145,7 @@ function createBaseTimelineProps(input: {
   onVirtualizerSnapshot?: ComponentProps<typeof MessagesTimeline>["onVirtualizerSnapshot"];
 }): Omit<ComponentProps<typeof MessagesTimeline>, "scrollContainer"> {
   return {
+    threadId: ThreadId.makeUnsafe("virtualization-test-thread"),
     hasMessages: true,
     isWorking: false,
     activeTurnInProgress: false,

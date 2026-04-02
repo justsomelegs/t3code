@@ -66,6 +66,7 @@ interface MessagesTimelineProps {
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
+  nowIso?: string;
   scrollContainer: HTMLDivElement | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   completionDividerBeforeEntryId: string | null;
@@ -78,6 +79,17 @@ interface MessagesTimelineProps {
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  onVirtualizerSnapshot?: (snapshot: {
+    totalSize: number;
+    measurements: ReadonlyArray<{
+      id: string;
+      kind: string;
+      index: number;
+      size: number;
+      start: number;
+      end: number;
+    }>;
+  }) => void;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
