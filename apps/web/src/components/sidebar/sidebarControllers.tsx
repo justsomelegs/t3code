@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import {
+  parseScopedThreadKey,
   scopedProjectKey,
   scopedThreadKey,
   scopeProjectRef,
@@ -27,6 +28,7 @@ import {
   useThreadJumpHintVisibility,
 } from "../Sidebar.logic";
 import {
+  createSidebarActiveRouteProjectKeySelectorByRef,
   createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector,
   type SidebarThreadSortSnapshot,
 } from "./sidebarSelectors";
@@ -101,16 +103,6 @@ function useSidebarKeyboardController(input: {
   } = input;
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const { showThreadJumpHints, updateThreadJumpHintsVisibility } = useThreadJumpHintVisibility();
-  const sidebarThreadSnapshotByKey = useMemo(
-    () =>
-      new Map(
-        sidebarThreadSortSnapshots.map(
-          (thread) =>
-            [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
-        ),
-      ),
-    [sidebarThreadSortSnapshots],
-  );
   const threadsByProjectKey = useMemo(() => {
     const next = new Map<LogicalProjectKey, SidebarThreadSortSnapshot[]>();
     for (const thread of sidebarThreadSortSnapshots) {
@@ -274,14 +266,14 @@ function useSidebarKeyboardController(input: {
         if (!targetThreadKey) {
           return;
         }
-        const targetThread = sidebarThreadSnapshotByKey.get(targetThreadKey);
+        const targetThread = parseScopedThreadKey(targetThreadKey);
         if (!targetThread) {
           return;
         }
 
         event.preventDefault();
         event.stopPropagation();
-        navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
+        navigateToThread(targetThread);
         return;
       }
 
@@ -294,14 +286,14 @@ function useSidebarKeyboardController(input: {
       if (!targetThreadKey) {
         return;
       }
-      const targetThread = sidebarThreadSnapshotByKey.get(targetThreadKey);
+      const targetThread = parseScopedThreadKey(targetThreadKey);
       if (!targetThread) {
         return;
       }
 
       event.preventDefault();
       event.stopPropagation();
-      navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
+      navigateToThread(targetThread);
     };
 
     const onWindowKeyUp = (event: globalThis.KeyboardEvent) => {
@@ -340,7 +332,6 @@ function useSidebarKeyboardController(input: {
     navigateToThread,
     platform,
     routeThreadKey,
-    sidebarThreadSnapshotByKey,
     threadJumpCommandByKey,
     threadJumpThreadKeys,
     updateThreadJumpHintsVisibility,
@@ -425,25 +416,12 @@ export const SidebarKeyboardController = memo(function SidebarKeyboardController
     select: (params) => resolveThreadRouteRef(params),
   });
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
-  const activeRouteProjectKey = useMemo(() => {
-    if (!routeThreadRef) {
-      return null;
-    }
-
-    const activeThread = sidebarThreadSortSnapshots.find(
-      (thread) =>
-        thread.environmentId === routeThreadRef.environmentId &&
-        thread.id === routeThreadRef.threadId,
-    );
-    if (!activeThread) {
-      return null;
-    }
-
-    const physicalKey = scopedProjectKey(
-      scopeProjectRef(activeThread.environmentId, activeThread.projectId),
-    );
-    return physicalToLogicalKey.get(physicalKey) ?? physicalKey;
-  }, [physicalToLogicalKey, routeThreadRef, sidebarThreadSortSnapshots]);
+  const activeRouteProjectKey = useStore(
+    useMemo(
+      () => createSidebarActiveRouteProjectKeySelectorByRef(routeThreadRef, physicalToLogicalKey),
+      [physicalToLogicalKey, routeThreadRef],
+    ),
+  );
   const keybindings = useServerKeybindings();
   const platform = navigator.platform;
   const threadJumpLabelByKey = useSidebarKeyboardController({

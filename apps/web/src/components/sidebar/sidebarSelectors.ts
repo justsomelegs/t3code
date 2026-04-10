@@ -53,6 +53,11 @@ export interface SidebarThreadRowSnapshot {
   worktreePath: string | null;
 }
 
+export interface SidebarThreadMetaSnapshot {
+  activityTimestamp: string;
+  isRunning: boolean;
+}
+
 interface ProjectThreadRenderEntry {
   threadKey: string;
   id: ThreadId;
@@ -334,11 +339,87 @@ export function createSidebarThreadStatusInputSelectorByRef(
       hasPendingApprovals: summary.hasPendingApprovals,
       hasPendingUserInput: summary.hasPendingUserInput,
       interactionMode: summary.interactionMode,
-      latestTurn: summary.latestTurn,
-      session: summary.session,
+      latestTurn: summary.latestTurn
+        ? {
+            turnId: summary.latestTurn.turnId,
+            startedAt: summary.latestTurn.startedAt,
+            completedAt: summary.latestTurn.completedAt,
+          }
+        : null,
+      session: summary.session
+        ? {
+            orchestrationStatus: summary.session.orchestrationStatus,
+            activeTurnId: summary.session.activeTurnId,
+            status: summary.session.status,
+          }
+        : null,
     };
 
     if (projectThreadStatusInputsEqual(previousResult, nextResult)) {
+      return previousResult;
+    }
+
+    previousResult = nextResult;
+    return nextResult;
+  };
+}
+
+export function createSidebarThreadMetaSnapshotSelectorByRef(
+  ref: ScopedThreadRef | null | undefined,
+): (state: AppState) => SidebarThreadMetaSnapshot | undefined {
+  let previousResult: SidebarThreadMetaSnapshot | undefined;
+
+  return (state) => {
+    if (!ref) {
+      return undefined;
+    }
+
+    const summary =
+      state.environmentStateById[ref.environmentId]?.sidebarThreadSummaryById[ref.threadId];
+    if (!summary) {
+      return undefined;
+    }
+
+    const nextResult: SidebarThreadMetaSnapshot = {
+      activityTimestamp: summary.updatedAt ?? summary.createdAt,
+      isRunning: summary.session?.status === "running" && summary.session.activeTurnId != null,
+    };
+
+    if (
+      previousResult &&
+      previousResult.activityTimestamp === nextResult.activityTimestamp &&
+      previousResult.isRunning === nextResult.isRunning
+    ) {
+      return previousResult;
+    }
+
+    previousResult = nextResult;
+    return nextResult;
+  };
+}
+
+export function createSidebarActiveRouteProjectKeySelectorByRef(
+  ref: ScopedThreadRef | null | undefined,
+  physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>,
+): (state: AppState) => LogicalProjectKey | null {
+  let previousResult: LogicalProjectKey | null = null;
+
+  return (state) => {
+    if (!ref) {
+      previousResult = null;
+      return null;
+    }
+
+    const summary =
+      state.environmentStateById[ref.environmentId]?.sidebarThreadSummaryById[ref.threadId];
+    if (!summary) {
+      previousResult = null;
+      return null;
+    }
+
+    const physicalKey = scopedProjectKey(scopeProjectRef(summary.environmentId, summary.projectId));
+    const nextResult = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
+    if (previousResult === nextResult) {
       return previousResult;
     }
 

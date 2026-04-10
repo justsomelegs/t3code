@@ -122,6 +122,7 @@ import {
 import {
   createSidebarProjectRenderStateSelector,
   createSidebarProjectThreadStatusInputsSelector,
+  createSidebarThreadMetaSnapshotSelectorByRef,
   createSidebarThreadRowSnapshotSelectorByRef,
   createSidebarThreadStatusInputSelectorByRef,
   type ProjectThreadStatusInput,
@@ -134,7 +135,6 @@ import {
 import {
   collapseSidebarProjectThreadList,
   expandSidebarProjectThreadList,
-  sidebarProjectSnapshotsEqual,
   syncSidebarProjectMappings,
   useSidebarIsActiveThread,
   useSidebarProjectActiveRouteThreadKey,
@@ -145,16 +145,18 @@ import {
   type SidebarProjectSnapshot,
 } from "./sidebar/sidebarViewStore";
 import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
+import {
+  buildSidebarPhysicalToLogicalKeyMap,
+  buildSidebarProjectSnapshots,
+} from "./sidebar/sidebarProjectSnapshots";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { readEnvironmentApi } from "../environmentApi";
 import { useSettings, useUpdateSettings } from "~/hooks/useSettings";
 import { useServerKeybindings } from "../rpc/serverState";
-import { deriveLogicalProjectKey } from "../logicalProject";
 import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
-import type { Project } from "../types";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -190,11 +192,6 @@ function useSidebarThreadStatusInput(
   return useStore(
     useMemo(() => createSidebarThreadStatusInputSelectorByRef(threadRef), [threadRef]),
   );
-}
-
-function useSidebarThreadRunningState(threadRef: ScopedThreadRef | null): boolean {
-  const statusInput = useSidebarThreadStatusInput(threadRef);
-  return statusInput?.session?.status === "running" && statusInput.session.activeTurnId != null;
 }
 
 function ThreadStatusLabel({
@@ -289,81 +286,174 @@ function resolveThreadPr(
   return gitStatus.pr ?? null;
 }
 
-const SidebarThreadMetaInfo = memo(function SidebarThreadMetaInfo(props: {
-  threadKey: string;
-  threadRef: ScopedThreadRef;
+const SidebarThreadMetaCluster = memo(function SidebarThreadMetaCluster(props: {
+  appSettingsConfirmThreadArchive: boolean;
+  confirmArchiveButtonRef: React.RefObject<HTMLButtonElement | null>;
+  handleArchiveImmediateClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  handleConfirmArchiveClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  handleStartArchiveConfirmation: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  isConfirmingArchive: boolean;
   isHighlighted: boolean;
   isRemoteThread: boolean;
+  stopPropagationOnPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => void;
   threadEnvironmentLabel: string | null;
-  isConfirmingArchive: boolean;
+  threadId: ThreadId;
+  threadKey: string;
+  threadRef: ScopedThreadRef;
+  threadTitle: string;
 }) {
   const {
-    threadKey,
-    threadRef,
+    appSettingsConfirmThreadArchive,
+    confirmArchiveButtonRef,
+    handleArchiveImmediateClick,
+    handleConfirmArchiveClick,
+    handleStartArchiveConfirmation,
+    isConfirmingArchive,
     isHighlighted,
     isRemoteThread,
+    stopPropagationOnPointerDown,
     threadEnvironmentLabel,
-    isConfirmingArchive,
+    threadId,
+    threadKey,
+    threadRef,
+    threadTitle,
   } = props;
   const jumpLabel = useSidebarThreadJumpLabel(threadKey);
-  const isThreadRunning = useSidebarThreadRunningState(threadRef);
-  const hidden = isConfirmingArchive && !isThreadRunning;
-  const relativeTimestamp = useStore(
-    useMemo(
-      () => (state: import("../store").AppState) => {
-        const thread = selectSidebarThreadSummaryByRef(state, threadRef);
-        return thread ? formatRelativeTimeLabel(thread.updatedAt ?? thread.createdAt) : null;
-      },
-      [threadRef],
-    ),
+  const metaSnapshot = useStore(
+    useMemo(() => createSidebarThreadMetaSnapshotSelectorByRef(threadRef), [threadRef]),
   );
+  const isThreadRunning = metaSnapshot?.isRunning ?? false;
+  const hidden = isConfirmingArchive && !isThreadRunning;
+  const relativeTimestamp = useMemo(
+    () => (metaSnapshot ? formatRelativeTimeLabel(metaSnapshot.activityTimestamp) : null),
+    [metaSnapshot],
+  );
+  const isConfirmingArchiveVisible = isConfirmingArchive && !isThreadRunning;
+
+  const archiveControl = useMemo(() => {
+    if (isConfirmingArchiveVisible) {
+      return (
+        <button
+          ref={confirmArchiveButtonRef}
+          type="button"
+          data-thread-selection-safe
+          data-testid={`thread-archive-confirm-${threadId}`}
+          aria-label={`Confirm archive ${threadTitle}`}
+          className="absolute top-1/2 right-1 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center rounded-full bg-destructive/12 px-2 text-[10px] font-medium text-destructive transition-colors hover:bg-destructive/18 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-destructive/40"
+          onPointerDown={stopPropagationOnPointerDown}
+          onClick={handleConfirmArchiveClick}
+        >
+          Confirm
+        </button>
+      );
+    }
+
+    if (isThreadRunning) {
+      return null;
+    }
+
+    if (appSettingsConfirmThreadArchive) {
+      return (
+        <div className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
+          <button
+            type="button"
+            data-thread-selection-safe
+            data-testid={`thread-archive-${threadId}`}
+            aria-label={`Archive ${threadTitle}`}
+            className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+            onPointerDown={stopPropagationOnPointerDown}
+            onClick={handleStartArchiveConfirmation}
+          >
+            <ArchiveIcon className="size-3.5" />
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <div className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
+              <button
+                type="button"
+                data-thread-selection-safe
+                data-testid={`thread-archive-${threadId}`}
+                aria-label={`Archive ${threadTitle}`}
+                className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                onPointerDown={stopPropagationOnPointerDown}
+                onClick={handleArchiveImmediateClick}
+              >
+                <ArchiveIcon className="size-3.5" />
+              </button>
+            </div>
+          }
+        />
+        <TooltipPopup side="top">Archive</TooltipPopup>
+      </Tooltip>
+    );
+  }, [
+    appSettingsConfirmThreadArchive,
+    confirmArchiveButtonRef,
+    handleArchiveImmediateClick,
+    handleConfirmArchiveClick,
+    handleStartArchiveConfirmation,
+    isConfirmingArchiveVisible,
+    isThreadRunning,
+    stopPropagationOnPointerDown,
+    threadId,
+    threadTitle,
+  ]);
 
   return (
-    <span
-      className={
-        hidden
-          ? "pointer-events-none opacity-0"
-          : !isThreadRunning
-            ? "pointer-events-none transition-opacity duration-150 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
-            : "pointer-events-none"
-      }
-    >
-      <span className="inline-flex items-center gap-1">
-        {isRemoteThread && (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <span
-                  aria-label={threadEnvironmentLabel ?? "Remote"}
-                  className="inline-flex items-center justify-center"
-                />
-              }
+    <>
+      {archiveControl}
+      <span
+        className={
+          hidden
+            ? "pointer-events-none opacity-0"
+            : !isThreadRunning
+              ? "pointer-events-none transition-opacity duration-150 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
+              : "pointer-events-none"
+        }
+      >
+        <span className="inline-flex items-center gap-1">
+          {isRemoteThread && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-label={threadEnvironmentLabel ?? "Remote"}
+                    className="inline-flex items-center justify-center"
+                  />
+                }
+              >
+                <CloudIcon className="size-3 text-muted-foreground/40" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">{threadEnvironmentLabel}</TooltipPopup>
+            </Tooltip>
+          )}
+          {jumpLabel ? (
+            <span
+              className="inline-flex h-5 items-center rounded-full border border-border/80 bg-background/90 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+              title={jumpLabel}
             >
-              <CloudIcon className="size-3 text-muted-foreground/40" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">{threadEnvironmentLabel}</TooltipPopup>
-          </Tooltip>
-        )}
-        {jumpLabel ? (
-          <span
-            className="inline-flex h-5 items-center rounded-full border border-border/80 bg-background/90 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
-            title={jumpLabel}
-          >
-            {jumpLabel}
-          </span>
-        ) : relativeTimestamp ? (
-          <span
-            className={`text-[10px] ${
-              isHighlighted
-                ? "text-foreground/72 dark:text-foreground/82"
-                : "text-muted-foreground/40"
-            }`}
-          >
-            {relativeTimestamp}
-          </span>
-        ) : null}
+              {jumpLabel}
+            </span>
+          ) : relativeTimestamp ? (
+            <span
+              className={`text-[10px] ${
+                isHighlighted
+                  ? "text-foreground/72 dark:text-foreground/82"
+                  : "text-muted-foreground/40"
+              }`}
+            >
+              {relativeTimestamp}
+            </span>
+          ) : null}
+        </span>
       </span>
-    </span>
+    </>
   );
 });
 
@@ -411,96 +501,6 @@ const SidebarThreadTerminalStatusIndicator = memo(
     ) : null;
   },
 );
-
-const SidebarThreadArchiveControl = memo(function SidebarThreadArchiveControl(props: {
-  appSettingsConfirmThreadArchive: boolean;
-  confirmArchiveButtonRef: React.RefObject<HTMLButtonElement | null>;
-  handleArchiveImmediateClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  handleConfirmArchiveClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  handleStartArchiveConfirmation: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  isConfirmingArchive: boolean;
-  stopPropagationOnPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => void;
-  threadId: ThreadId;
-  threadRef: ScopedThreadRef;
-  threadTitle: string;
-}) {
-  const {
-    appSettingsConfirmThreadArchive,
-    confirmArchiveButtonRef,
-    handleArchiveImmediateClick,
-    handleConfirmArchiveClick,
-    handleStartArchiveConfirmation,
-    isConfirmingArchive,
-    stopPropagationOnPointerDown,
-    threadId,
-    threadRef,
-    threadTitle,
-  } = props;
-  const isThreadRunning = useSidebarThreadRunningState(threadRef);
-  const isConfirmingArchiveVisible = isConfirmingArchive && !isThreadRunning;
-
-  if (isConfirmingArchiveVisible) {
-    return (
-      <button
-        ref={confirmArchiveButtonRef}
-        type="button"
-        data-thread-selection-safe
-        data-testid={`thread-archive-confirm-${threadId}`}
-        aria-label={`Confirm archive ${threadTitle}`}
-        className="absolute top-1/2 right-1 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center rounded-full bg-destructive/12 px-2 text-[10px] font-medium text-destructive transition-colors hover:bg-destructive/18 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-destructive/40"
-        onPointerDown={stopPropagationOnPointerDown}
-        onClick={handleConfirmArchiveClick}
-      >
-        Confirm
-      </button>
-    );
-  }
-
-  if (isThreadRunning) {
-    return null;
-  }
-
-  if (appSettingsConfirmThreadArchive) {
-    return (
-      <div className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
-        <button
-          type="button"
-          data-thread-selection-safe
-          data-testid={`thread-archive-${threadId}`}
-          aria-label={`Archive ${threadTitle}`}
-          className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-          onPointerDown={stopPropagationOnPointerDown}
-          onClick={handleStartArchiveConfirmation}
-        >
-          <ArchiveIcon className="size-3.5" />
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <div className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
-            <button
-              type="button"
-              data-thread-selection-safe
-              data-testid={`thread-archive-${threadId}`}
-              aria-label={`Archive ${threadTitle}`}
-              className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-              onPointerDown={stopPropagationOnPointerDown}
-              onClick={handleArchiveImmediateClick}
-            >
-              <ArchiveIcon className="size-3.5" />
-            </button>
-          </div>
-        }
-      />
-      <TooltipPopup side="top">Archive</TooltipPopup>
-    </Tooltip>
-  );
-});
 
 interface SidebarThreadRowProps {
   threadKey: string;
@@ -1068,25 +1068,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <SidebarThreadTerminalStatusIndicator threadRef={threadRef} />
           <div className="flex min-w-12 justify-end">
-            <SidebarThreadArchiveControl
+            <SidebarThreadMetaCluster
               appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
               confirmArchiveButtonRef={confirmArchiveButtonRef}
               handleArchiveImmediateClick={handleArchiveImmediateClick}
               handleConfirmArchiveClick={handleConfirmArchiveClick}
               handleStartArchiveConfirmation={handleStartArchiveConfirmation}
               isConfirmingArchive={isConfirmingArchive}
-              stopPropagationOnPointerDown={stopPropagationOnPointerDown}
-              threadId={thread.id}
-              threadRef={threadRef}
-              threadTitle={thread.title}
-            />
-            <SidebarThreadMetaInfo
-              threadKey={threadKey}
-              threadRef={threadRef}
               isHighlighted={isHighlighted}
               isRemoteThread={isRemoteThread}
+              stopPropagationOnPointerDown={stopPropagationOnPointerDown}
               threadEnvironmentLabel={threadEnvironmentLabel}
-              isConfirmingArchive={isConfirmingArchive}
+              threadId={thread.id}
+              threadKey={threadKey}
+              threadRef={threadRef}
+              threadTitle={thread.title}
             />
           </div>
         </div>
@@ -2295,97 +2291,25 @@ export default function Sidebar() {
     });
   }, [projectOrder, projects]);
 
-  // Build a mapping from physical project key → logical project key for
-  // cross-environment grouping.  Projects that share a repositoryIdentity
-  // canonicalKey are treated as one logical project in the sidebar.
-  const physicalToLogicalKey = useMemo(() => {
-    const mapping = new Map<string, string>();
-    for (const project of orderedProjects) {
-      const physicalKey = scopedProjectKey(scopeProjectRef(project.environmentId, project.id));
-      mapping.set(physicalKey, deriveLogicalProjectKey(project));
-    }
-    return mapping;
-  }, [orderedProjects]);
+  const physicalToLogicalKey = useMemo(
+    () => buildSidebarPhysicalToLogicalKeyMap(orderedProjects),
+    [orderedProjects],
+  );
 
   const previousSidebarProjectSnapshotByKeyRef = useRef<
     ReadonlyMap<string, SidebarProjectSnapshot>
   >(new Map<string, SidebarProjectSnapshot>());
   const sidebarProjects = useMemo<SidebarProjectSnapshot[]>(() => {
-    // Group projects by logical key while preserving insertion order from
-    // orderedProjects.
-    const groupedMembers = new Map<string, Project[]>();
-    for (const project of orderedProjects) {
-      const logicalKey = deriveLogicalProjectKey(project);
-      const existing = groupedMembers.get(logicalKey);
-      if (existing) {
-        existing.push(project);
-      } else {
-        groupedMembers.set(logicalKey, [project]);
-      }
-    }
-
-    const previousSidebarProjectSnapshotByKey = previousSidebarProjectSnapshotByKeyRef.current;
-    const nextSidebarProjectSnapshotByKey = new Map<string, SidebarProjectSnapshot>();
-    const result: SidebarProjectSnapshot[] = [];
-    const seen = new Set<string>();
-    for (const project of orderedProjects) {
-      const logicalKey = deriveLogicalProjectKey(project);
-      if (seen.has(logicalKey)) continue;
-      seen.add(logicalKey);
-
-      const members = groupedMembers.get(logicalKey)!;
-      // Prefer the primary environment's project as the representative.
-      const representative: Project | undefined =
-        (primaryEnvironmentId
-          ? members.find((p) => p.environmentId === primaryEnvironmentId)
-          : undefined) ?? members[0];
-      if (!representative) continue;
-      const hasLocal =
-        primaryEnvironmentId !== null &&
-        members.some((p) => p.environmentId === primaryEnvironmentId);
-      const hasRemote =
-        primaryEnvironmentId !== null
-          ? members.some((p) => p.environmentId !== primaryEnvironmentId)
-          : false;
-
-      const refs = members.map((p) => scopeProjectRef(p.environmentId, p.id));
-      const remoteLabels = members
-        .filter((p) => primaryEnvironmentId !== null && p.environmentId !== primaryEnvironmentId)
-        .map((p) => {
-          const rt = savedEnvironmentRuntimeById[p.environmentId];
-          const saved = savedEnvironmentRegistry[p.environmentId];
-          return rt?.descriptor?.label ?? saved?.label ?? p.environmentId;
-        });
-      const nextSnapshot: SidebarProjectSnapshot = {
-        id: representative.id,
-        environmentId: representative.environmentId,
-        name: representative.name,
-        cwd: representative.cwd,
-        repositoryIdentity: representative.repositoryIdentity ?? null,
-        defaultModelSelection: representative.defaultModelSelection,
-        createdAt: representative.createdAt,
-        updatedAt: representative.updatedAt,
-        scripts: representative.scripts,
-        projectKey: logicalKey,
-        environmentPresence:
-          hasLocal && hasRemote ? "mixed" : hasRemote ? "remote-only" : "local-only",
-        memberProjectRefs: refs,
-        remoteEnvironmentLabels: remoteLabels,
-      };
-      const snapshot = sidebarProjectSnapshotsEqual(
-        previousSidebarProjectSnapshotByKey.get(logicalKey),
-        nextSnapshot,
-      )
-        ? (previousSidebarProjectSnapshotByKey.get(logicalKey) as SidebarProjectSnapshot)
-        : nextSnapshot;
-      nextSidebarProjectSnapshotByKey.set(logicalKey, snapshot);
-      result.push(snapshot);
-    }
-    previousSidebarProjectSnapshotByKeyRef.current =
-      nextSidebarProjectSnapshotByKey.size === 0
-        ? new Map<string, SidebarProjectSnapshot>()
-        : nextSidebarProjectSnapshotByKey;
-    return result;
+    const { projectSnapshotByKey, sidebarProjects: nextSidebarProjects } =
+      buildSidebarProjectSnapshots({
+        orderedProjects,
+        previousProjectSnapshotByKey: previousSidebarProjectSnapshotByKeyRef.current,
+        primaryEnvironmentId,
+        savedEnvironmentRegistryById: savedEnvironmentRegistry,
+        savedEnvironmentRuntimeById,
+      });
+    previousSidebarProjectSnapshotByKeyRef.current = projectSnapshotByKey;
+    return [...nextSidebarProjects];
   }, [
     orderedProjects,
     primaryEnvironmentId,
