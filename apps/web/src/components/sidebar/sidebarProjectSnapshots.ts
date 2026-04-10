@@ -1,8 +1,17 @@
+import type { ModelSelection, ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { deriveLogicalProjectKey, type LogicalProjectKey } from "../../logicalProject";
-import type { Project } from "../../types";
-import { sidebarProjectSnapshotsEqual, type SidebarProjectSnapshot } from "./sidebarViewStore";
+import type { Project, ProjectScript } from "../../types";
+
+export type EnvironmentPresence = "local-only" | "remote-only" | "mixed";
+
+export type SidebarProjectSnapshot = Project & {
+  projectKey: LogicalProjectKey;
+  environmentPresence: EnvironmentPresence;
+  memberProjectRefs: readonly ScopedProjectRef[];
+  remoteEnvironmentLabels: readonly string[];
+};
 
 type SavedEnvironmentRegistryEntry = {
   label?: string | null;
@@ -13,6 +22,78 @@ type SavedEnvironmentRuntimeEntry = {
     label?: string | null;
   } | null;
 } | null;
+
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function refsEqual(left: readonly ScopedProjectRef[], right: readonly ScopedProjectRef[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (ref, index) =>
+        ref.environmentId === right[index]?.environmentId &&
+        ref.projectId === right[index]?.projectId,
+    )
+  );
+}
+
+function modelSelectionsEqual(left: ModelSelection | null, right: ModelSelection | null): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.provider === right.provider &&
+    left.model === right.model &&
+    JSON.stringify(left.options ?? null) === JSON.stringify(right.options ?? null)
+  );
+}
+
+function projectScriptsEqual(
+  left: readonly ProjectScript[],
+  right: readonly ProjectScript[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((script, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        script.id === other.id &&
+        script.name === other.name &&
+        script.command === other.command &&
+        script.icon === other.icon &&
+        script.runOnWorktreeCreate === other.runOnWorktreeCreate
+      );
+    })
+  );
+}
+
+export function sidebarProjectSnapshotsEqual(
+  left: SidebarProjectSnapshot | undefined,
+  right: SidebarProjectSnapshot,
+): boolean {
+  return (
+    left !== undefined &&
+    left.id === right.id &&
+    left.environmentId === right.environmentId &&
+    left.name === right.name &&
+    left.cwd === right.cwd &&
+    left.repositoryIdentity === right.repositoryIdentity &&
+    modelSelectionsEqual(left.defaultModelSelection, right.defaultModelSelection) &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    projectScriptsEqual(left.scripts, right.scripts) &&
+    left.projectKey === right.projectKey &&
+    left.environmentPresence === right.environmentPresence &&
+    refsEqual(left.memberProjectRefs, right.memberProjectRefs) &&
+    stringArraysEqual(left.remoteEnvironmentLabels, right.remoteEnvironmentLabels)
+  );
+}
 
 export function buildSidebarPhysicalToLogicalKeyMap(
   orderedProjects: readonly Project[],

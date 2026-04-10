@@ -16,19 +16,20 @@ import type { AppState, EnvironmentState } from "../../store";
 import type { SidebarThreadSummary } from "../../types";
 import type { LogicalProjectKey } from "../../logicalProject";
 
-export interface SidebarThreadSortSnapshot {
+export interface SidebarProjectOrderingThreadSnapshot {
   id: ThreadId;
   environmentId: EnvironmentId;
-  projectId: ProjectId;
+  projectId: LogicalProjectKey;
   createdAt: string;
   archivedAt: string | null;
   updatedAt?: string | undefined;
   latestUserMessageAt: string | null;
 }
 
-const EMPTY_SIDEBAR_THREAD_SORT_SNAPSHOTS: SidebarThreadSortSnapshot[] = [];
+const EMPTY_PROJECT_ORDERING_THREAD_SNAPSHOTS: SidebarProjectOrderingThreadSnapshot[] = [];
 const EMPTY_PROJECT_THREAD_KEYS: string[] = [];
 const EMPTY_PROJECT_THREAD_STATUS_INPUTS: ProjectThreadStatusInput[] = [];
+const EMPTY_SORTED_THREAD_KEYS_BY_LOGICAL_PROJECT = new Map<LogicalProjectKey, readonly string[]>();
 
 function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -197,40 +198,47 @@ function includeUpdatedSortFields(
   return sortOrder === "updated_at";
 }
 
-export function createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector(
-  sortOrder: SidebarProjectSortOrder | SidebarThreadSortOrder,
-): (state: AppState) => SidebarThreadSortSnapshot[] {
-  let previousResult = EMPTY_SIDEBAR_THREAD_SORT_SNAPSHOTS;
-  let previousEntries = new Map<string, SidebarThreadSortSnapshot>();
+export function createSidebarProjectOrderingThreadSnapshotsSelector(input: {
+  physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>;
+  sortOrder: SidebarProjectSortOrder;
+}): (state: AppState) => readonly SidebarProjectOrderingThreadSnapshot[] {
+  let previousResult:
+    | readonly SidebarProjectOrderingThreadSnapshot[]
+    | SidebarProjectOrderingThreadSnapshot[] = EMPTY_PROJECT_ORDERING_THREAD_SNAPSHOTS;
+  let previousEntries = new Map<string, SidebarProjectOrderingThreadSnapshot>();
 
   return (state) => {
-    if (sortOrder === "manual") {
-      previousEntries = new Map<string, SidebarThreadSortSnapshot>();
-      previousResult = EMPTY_SIDEBAR_THREAD_SORT_SNAPSHOTS;
+    if (input.sortOrder === "manual") {
+      previousEntries = new Map<string, SidebarProjectOrderingThreadSnapshot>();
+      previousResult = EMPTY_PROJECT_ORDERING_THREAD_SNAPSHOTS;
       return previousResult;
     }
 
-    const nextEntries = new Map<string, SidebarThreadSortSnapshot>();
-    const nextResult: SidebarThreadSortSnapshot[] = [];
+    const watchUpdatedFields = includeUpdatedSortFields(input.sortOrder);
+    const nextEntries = new Map<string, SidebarProjectOrderingThreadSnapshot>();
+    const nextResult: SidebarProjectOrderingThreadSnapshot[] = [];
     let changed = false;
-    const watchUpdatedFields = includeUpdatedSortFields(sortOrder);
 
     for (const [environmentId, environmentState] of Object.entries(
       state.environmentStateById,
     ) as Array<[EnvironmentId, EnvironmentState]>) {
       for (const threadId of environmentState.threadIds) {
         const summary = environmentState.sidebarThreadSummaryById[threadId];
-        if (!summary || summary.environmentId !== environmentId) {
+        if (!summary || summary.environmentId !== environmentId || summary.archivedAt !== null) {
           continue;
         }
 
+        const physicalKey = scopedProjectKey(
+          scopeProjectRef(summary.environmentId, summary.projectId),
+        );
+        const logicalProjectKey = input.physicalToLogicalKey.get(physicalKey) ?? physicalKey;
         const entryKey = `${environmentId}:${threadId}`;
         const previousEntry = previousEntries.get(entryKey);
         if (
           previousEntry &&
           previousEntry.id === summary.id &&
           previousEntry.environmentId === summary.environmentId &&
-          previousEntry.projectId === summary.projectId &&
+          previousEntry.projectId === logicalProjectKey &&
           previousEntry.createdAt === summary.createdAt &&
           previousEntry.archivedAt === summary.archivedAt &&
           (!watchUpdatedFields ||
@@ -245,10 +253,10 @@ export function createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector(
           continue;
         }
 
-        const snapshot: SidebarThreadSortSnapshot = {
+        const snapshot: SidebarProjectOrderingThreadSnapshot = {
           id: summary.id,
           environmentId: summary.environmentId,
-          projectId: summary.projectId,
+          projectId: logicalProjectKey,
           createdAt: summary.createdAt,
           archivedAt: summary.archivedAt,
           updatedAt: summary.updatedAt,
@@ -270,7 +278,77 @@ export function createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector(
     }
 
     previousEntries = nextEntries;
-    previousResult = nextResult.length === 0 ? EMPTY_SIDEBAR_THREAD_SORT_SNAPSHOTS : nextResult;
+    previousResult = nextResult.length === 0 ? EMPTY_PROJECT_ORDERING_THREAD_SNAPSHOTS : nextResult;
+    return previousResult;
+  };
+}
+
+export function createSidebarSortedThreadKeysByLogicalProjectSelector(input: {
+  physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>;
+  threadSortOrder: SidebarThreadSortOrder;
+}): (state: AppState) => ReadonlyMap<LogicalProjectKey, readonly string[]> {
+  let previousResult = EMPTY_SORTED_THREAD_KEYS_BY_LOGICAL_PROJECT;
+
+  return (state) => {
+    const groupedEntries = new Map<LogicalProjectKey, ProjectThreadRenderEntry[]>();
+    for (const [environmentId, environmentState] of Object.entries(
+      state.environmentStateById,
+    ) as Array<[EnvironmentId, EnvironmentState]>) {
+      for (const threadId of environmentState.threadIds) {
+        const summary = environmentState.sidebarThreadSummaryById[threadId];
+        if (!summary || summary.environmentId !== environmentId || summary.archivedAt !== null) {
+          continue;
+        }
+
+        const physicalKey = scopedProjectKey(
+          scopeProjectRef(summary.environmentId, summary.projectId),
+        );
+        const logicalProjectKey = input.physicalToLogicalKey.get(physicalKey) ?? physicalKey;
+        const projectEntries = groupedEntries.get(logicalProjectKey);
+        const entry: ProjectThreadRenderEntry = {
+          threadKey: scopedThreadKey(scopeThreadRef(summary.environmentId, summary.id)),
+          id: summary.id,
+          environmentId: summary.environmentId,
+          projectId: logicalProjectKey,
+          createdAt: summary.createdAt,
+          archivedAt: summary.archivedAt,
+          updatedAt: summary.updatedAt,
+          latestUserMessageAt: summary.latestUserMessageAt,
+        };
+        if (projectEntries) {
+          projectEntries.push(entry);
+        } else {
+          groupedEntries.set(logicalProjectKey, [entry]);
+        }
+      }
+    }
+
+    const nextResult = new Map<LogicalProjectKey, readonly string[]>();
+    let changed = previousResult.size !== groupedEntries.size;
+
+    for (const [projectKey, entries] of groupedEntries) {
+      const nextThreadKeys = sortThreadsForSidebar(entries, input.threadSortOrder).map(
+        (thread) => thread.threadKey,
+      );
+      const previousThreadKeys = previousResult.get(projectKey);
+      if (previousThreadKeys && stringArraysEqual(previousThreadKeys, nextThreadKeys)) {
+        nextResult.set(projectKey, previousThreadKeys);
+        continue;
+      }
+
+      nextResult.set(
+        projectKey,
+        nextThreadKeys.length === 0 ? EMPTY_PROJECT_THREAD_KEYS : nextThreadKeys,
+      );
+      changed = true;
+    }
+
+    if (!changed) {
+      return previousResult;
+    }
+
+    previousResult =
+      nextResult.size === 0 ? EMPTY_SORTED_THREAD_KEYS_BY_LOGICAL_PROJECT : nextResult;
     return previousResult;
   };
 }

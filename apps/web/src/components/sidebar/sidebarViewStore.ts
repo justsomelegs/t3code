@@ -1,23 +1,10 @@
 import { useCallback } from "react";
-import type { ScopedProjectRef } from "@t3tools/contracts";
 import { useStore as useZustandStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import type { LogicalProjectKey } from "../../logicalProject";
-import type { Project } from "../../types";
-
-export type EnvironmentPresence = "local-only" | "remote-only" | "mixed";
-
-export type SidebarProjectSnapshot = Project & {
-  projectKey: LogicalProjectKey;
-  environmentPresence: EnvironmentPresence;
-  memberProjectRefs: readonly ScopedProjectRef[];
-  remoteEnvironmentLabels: readonly string[];
-};
 
 interface SidebarTransientState {
   sortedProjectKeys: readonly LogicalProjectKey[];
-  projectSnapshotByKey: ReadonlyMap<LogicalProjectKey, SidebarProjectSnapshot>;
-  physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>;
   activeRouteThreadKey: string | null;
   activeRouteProjectKey: LogicalProjectKey | null;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
@@ -26,74 +13,32 @@ interface SidebarTransientState {
 
 const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
 const EMPTY_SIDEBAR_PROJECT_KEYS: LogicalProjectKey[] = [];
-const EMPTY_SIDEBAR_PROJECT_SNAPSHOT_BY_KEY = new Map<LogicalProjectKey, SidebarProjectSnapshot>();
 const EMPTY_EXPANDED_THREAD_LISTS_BY_PROJECT = new Set<LogicalProjectKey>();
 
 const sidebarViewStore = createStore<SidebarTransientState>(() => ({
   sortedProjectKeys: EMPTY_SIDEBAR_PROJECT_KEYS,
-  projectSnapshotByKey: EMPTY_SIDEBAR_PROJECT_SNAPSHOT_BY_KEY,
-  physicalToLogicalKey: new Map<string, LogicalProjectKey>(),
   activeRouteThreadKey: null,
   activeRouteProjectKey: null,
   threadJumpLabelByKey: EMPTY_THREAD_JUMP_LABELS,
   expandedThreadListsByProject: EMPTY_EXPANDED_THREAD_LISTS_BY_PROJECT,
 }));
 
-function refsEqual(left: readonly ScopedProjectRef[], right: readonly ScopedProjectRef[]): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (ref, index) =>
-        ref.environmentId === right[index]?.environmentId &&
-        ref.projectId === right[index]?.projectId,
-    )
-  );
+export function resetSidebarViewState(): void {
+  sidebarViewStore.setState({
+    sortedProjectKeys: EMPTY_SIDEBAR_PROJECT_KEYS,
+    activeRouteThreadKey: null,
+    activeRouteProjectKey: null,
+    threadJumpLabelByKey: EMPTY_THREAD_JUMP_LABELS,
+    expandedThreadListsByProject: EMPTY_EXPANDED_THREAD_LISTS_BY_PROJECT,
+  });
 }
 
 export function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-export function sidebarProjectSnapshotsEqual(
-  left: SidebarProjectSnapshot | undefined,
-  right: SidebarProjectSnapshot,
-): boolean {
-  return (
-    left !== undefined &&
-    left.id === right.id &&
-    left.environmentId === right.environmentId &&
-    left.name === right.name &&
-    left.cwd === right.cwd &&
-    left.repositoryIdentity === right.repositoryIdentity &&
-    left.defaultModelSelection === right.defaultModelSelection &&
-    left.createdAt === right.createdAt &&
-    left.updatedAt === right.updatedAt &&
-    left.scripts === right.scripts &&
-    left.projectKey === right.projectKey &&
-    left.environmentPresence === right.environmentPresence &&
-    refsEqual(left.memberProjectRefs, right.memberProjectRefs) &&
-    stringArraysEqual(left.remoteEnvironmentLabels, right.remoteEnvironmentLabels)
-  );
-}
-
 export function useSidebarProjectKeys(): readonly LogicalProjectKey[] {
   return useZustandStore(sidebarViewStore, (state) => state.sortedProjectKeys);
-}
-
-export function useSidebarPhysicalToLogicalKey(): ReadonlyMap<string, LogicalProjectKey> {
-  return useZustandStore(sidebarViewStore, (state) => state.physicalToLogicalKey);
-}
-
-export function useSidebarProjectSnapshot(
-  projectKey: LogicalProjectKey,
-): SidebarProjectSnapshot | null {
-  return useZustandStore(
-    sidebarViewStore,
-    useCallback(
-      (state: SidebarTransientState) => state.projectSnapshotByKey.get(projectKey) ?? null,
-      [projectKey],
-    ),
-  );
 }
 
 export function useSidebarProjectThreadListExpanded(projectKey: LogicalProjectKey): boolean {
@@ -169,24 +114,6 @@ export function useSidebarProjectActiveRouteThreadKey(
       [projectKey],
     ),
   );
-}
-
-export function syncSidebarProjectMappings(input: {
-  projectSnapshotByKey: ReadonlyMap<LogicalProjectKey, SidebarProjectSnapshot>;
-  physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>;
-}): void {
-  const currentState = sidebarViewStore.getState();
-  if (
-    currentState.projectSnapshotByKey === input.projectSnapshotByKey &&
-    currentState.physicalToLogicalKey === input.physicalToLogicalKey
-  ) {
-    return;
-  }
-
-  sidebarViewStore.setState({
-    projectSnapshotByKey: input.projectSnapshotByKey,
-    physicalToLogicalKey: input.physicalToLogicalKey,
-  });
 }
 
 export function setSidebarProjectOrdering(sortedProjectKeys: readonly LogicalProjectKey[]): void {

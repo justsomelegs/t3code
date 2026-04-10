@@ -135,19 +135,18 @@ import {
 import {
   collapseSidebarProjectThreadList,
   expandSidebarProjectThreadList,
-  syncSidebarProjectMappings,
+  resetSidebarViewState,
   useSidebarIsActiveThread,
   useSidebarProjectActiveRouteThreadKey,
   useSidebarProjectKeys,
-  useSidebarProjectSnapshot,
   useSidebarProjectThreadListExpanded,
   useSidebarThreadJumpLabel,
-  type SidebarProjectSnapshot,
 } from "./sidebar/sidebarViewStore";
 import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
 import {
   buildSidebarPhysicalToLogicalKeyMap,
   buildSidebarProjectSnapshots,
+  type SidebarProjectSnapshot,
 } from "./sidebar/sidebarProjectSnapshots";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { readEnvironmentApi } from "../environmentApi";
@@ -504,13 +503,12 @@ const SidebarThreadTerminalStatusIndicator = memo(
 
 interface SidebarThreadRowProps {
   threadKey: string;
-  projectKey: string;
+  project: SidebarProjectSnapshot;
 }
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
-  const { threadKey, projectKey } = props;
+  const { threadKey, project } = props;
   const threadRef = useMemo(() => parseScopedThreadKey(threadKey), [threadKey]);
-  const project = useSidebarProjectSnapshot(projectKey);
   const threadSortOrder = useSettings<SidebarThreadSortOrder>(
     (settings) => settings.sidebarThreadSortOrder,
   );
@@ -1092,7 +1090,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 });
 
 interface SidebarProjectThreadListProps {
-  projectKey: string;
+  project: SidebarProjectSnapshot;
   projectExpanded: boolean;
   hasOverflowingThreads: boolean;
   hiddenThreadKeys: readonly string[];
@@ -1107,7 +1105,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   props: SidebarProjectThreadListProps,
 ) {
   const {
-    projectKey,
+    project,
     projectExpanded,
     hasOverflowingThreads,
     hiddenThreadKeys,
@@ -1137,7 +1135,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
       ) : null}
       {shouldShowThreadPanel &&
         renderedThreadKeys.map((threadKey) => {
-          return <SidebarThreadRow key={threadKey} threadKey={threadKey} projectKey={projectKey} />;
+          return <SidebarThreadRow key={threadKey} threadKey={threadKey} project={project} />;
         })}
 
       {projectExpanded && hasOverflowingThreads && !isThreadListExpanded && (
@@ -1148,12 +1146,12 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             size="sm"
             className="h-6 w-full translate-x-0 justify-start px-2 text-left text-[10px] text-muted-foreground/60 hover:bg-accent hover:text-muted-foreground/80"
             onClick={() => {
-              expandSidebarProjectThreadList(projectKey);
+              expandSidebarProjectThreadList(project.projectKey);
             }}
           >
             <span className="flex min-w-0 flex-1 items-center gap-2">
               <SidebarProjectOverflowStatusLabel
-                projectKey={projectKey}
+                project={project}
                 hiddenThreadKeys={hiddenThreadKeys}
               />
               <span>Show more</span>
@@ -1169,7 +1167,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             size="sm"
             className="h-6 w-full translate-x-0 justify-start px-2 text-left text-[10px] text-muted-foreground/60 hover:bg-accent hover:text-muted-foreground/80"
             onClick={() => {
-              collapseSidebarProjectThreadList(projectKey);
+              collapseSidebarProjectThreadList(project.projectKey);
             }}
           >
             <span>Show less</span>
@@ -1322,11 +1320,10 @@ const SidebarProjectHeaderStatusIndicator = memo(
 
 const SidebarProjectOverflowStatusLabel = memo(function SidebarProjectOverflowStatusLabel(props: {
   hiddenThreadKeys: readonly string[];
-  projectKey: string;
+  project: SidebarProjectSnapshot;
 }) {
-  const { hiddenThreadKeys, projectKey } = props;
-  const project = useSidebarProjectSnapshot(projectKey);
-  if (!project || hiddenThreadKeys.length === 0) {
+  const { hiddenThreadKeys, project } = props;
+  if (hiddenThreadKeys.length === 0) {
     return null;
   }
   const statusInputs = useSidebarProjectStatusInputs(project);
@@ -1345,23 +1342,19 @@ const SidebarProjectOverflowStatusLabel = memo(function SidebarProjectOverflowSt
 });
 
 interface SidebarProjectThreadSectionProps {
-  projectKey: string;
+  project: SidebarProjectSnapshot;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
 }
 
 const SidebarProjectThreadSection = memo(function SidebarProjectThreadSection(
   props: SidebarProjectThreadSectionProps,
 ) {
-  const { projectKey, attachThreadListAutoAnimateRef } = props;
-  const project = useSidebarProjectSnapshot(projectKey);
-  const isThreadListExpanded = useSidebarProjectThreadListExpanded(projectKey);
+  const { project, attachThreadListAutoAnimateRef } = props;
+  const isThreadListExpanded = useSidebarProjectThreadListExpanded(project.projectKey);
   const threadSortOrder = useSettings<SidebarThreadSortOrder>(
     (settings) => settings.sidebarThreadSortOrder,
   );
-  if (!project) {
-    return null;
-  }
-  const activeRouteThreadKey = useSidebarProjectActiveRouteThreadKey(projectKey);
+  const activeRouteThreadKey = useSidebarProjectActiveRouteThreadKey(project.projectKey);
   const projectExpanded = useUiStateStore(
     (state) => state.projectExpandedById[project.projectKey] ?? true,
   );
@@ -1381,7 +1374,7 @@ const SidebarProjectThreadSection = memo(function SidebarProjectThreadSection(
 
   return (
     <SidebarProjectThreadList
-      projectKey={project.projectKey}
+      project={project}
       projectExpanded={projectExpanded}
       hasOverflowingThreads={hasOverflowingThreads}
       hiddenThreadKeys={hiddenThreadKeys}
@@ -1395,7 +1388,7 @@ const SidebarProjectThreadSection = memo(function SidebarProjectThreadSection(
 });
 
 interface SidebarProjectHeaderProps {
-  projectKey: string;
+  project: SidebarProjectSnapshot;
   dragInProgressRef: React.RefObject<boolean>;
   suppressProjectClickAfterDragRef: React.RefObject<boolean>;
   suppressProjectClickForContextMenuRef: React.RefObject<boolean>;
@@ -1405,14 +1398,13 @@ interface SidebarProjectHeaderProps {
 
 const SidebarProjectHeader = memo(function SidebarProjectHeader(props: SidebarProjectHeaderProps) {
   const {
-    projectKey,
+    project,
     dragInProgressRef,
     suppressProjectClickAfterDragRef,
     suppressProjectClickForContextMenuRef,
     isManualProjectSorting,
     dragHandleProps,
   } = props;
-  const project = useSidebarProjectSnapshot(projectKey);
   const defaultThreadEnvMode = useSettings<ThreadEnvMode>(
     (settings) => settings.defaultThreadEnvMode,
   );
@@ -1448,7 +1440,9 @@ const SidebarProjectHeader = memo(function SidebarProjectHeader(props: SidebarPr
       });
     },
   });
-  const projectExpanded = useUiStateStore((state) => state.projectExpandedById[projectKey] ?? true);
+  const projectExpanded = useUiStateStore(
+    (state) => state.projectExpandedById[project.projectKey] ?? true,
+  );
   const projectThreadCount = useSidebarProjectThreadCount(project);
   const newThreadShortcutLabelOptions = useMemo(
     () => ({
@@ -1463,10 +1457,6 @@ const SidebarProjectHeader = memo(function SidebarProjectHeader(props: SidebarPr
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.newLocal", newThreadShortcutLabelOptions) ??
     shortcutLabelForCommand(keybindings, "chat.new", newThreadShortcutLabelOptions);
-  if (!project) {
-    return null;
-  }
-
   const handleProjectButtonClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       if (suppressProjectClickForContextMenuRef.current) {
@@ -1489,12 +1479,12 @@ const SidebarProjectHeader = memo(function SidebarProjectHeader(props: SidebarPr
       if (selectedThreadCount > 0) {
         clearSelection();
       }
-      toggleProject(projectKey);
+      toggleProject(project.projectKey);
     },
     [
       clearSelection,
       dragInProgressRef,
-      projectKey,
+      project.projectKey,
       selectedThreadCount,
       suppressProjectClickAfterDragRef,
       suppressProjectClickForContextMenuRef,
@@ -1509,9 +1499,9 @@ const SidebarProjectHeader = memo(function SidebarProjectHeader(props: SidebarPr
       if (dragInProgressRef.current) {
         return;
       }
-      toggleProject(projectKey);
+      toggleProject(project.projectKey);
     },
-    [dragInProgressRef, projectKey, toggleProject],
+    [dragInProgressRef, project.projectKey, toggleProject],
   );
 
   const handleProjectButtonPointerDownCapture = useCallback(
@@ -1733,7 +1723,7 @@ const SidebarProjectHeader = memo(function SidebarProjectHeader(props: SidebarPr
 });
 
 interface SidebarProjectItemProps {
-  projectKey: string;
+  project: SidebarProjectSnapshot;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   dragInProgressRef: React.RefObject<boolean>;
   suppressProjectClickAfterDragRef: React.RefObject<boolean>;
@@ -1744,7 +1734,7 @@ interface SidebarProjectItemProps {
 
 const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjectItemProps) {
   const {
-    projectKey,
+    project,
     attachThreadListAutoAnimateRef,
     dragInProgressRef,
     suppressProjectClickAfterDragRef,
@@ -1756,7 +1746,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   return (
     <>
       <SidebarProjectHeader
-        projectKey={projectKey}
+        project={project}
         dragInProgressRef={dragInProgressRef}
         suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
         suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
@@ -1765,7 +1755,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       />
 
       <SidebarProjectThreadSection
-        projectKey={projectKey}
+        project={project}
         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
       />
     </>
@@ -1973,6 +1963,7 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 });
 
 interface SidebarProjectsContentProps {
+  sidebarProjectByKey: ReadonlyMap<string, SidebarProjectSnapshot>;
   showArm64IntelBuildWarning: boolean;
   arm64IntelBuildWarningDescription: string | null;
   desktopUpdateButtonAction: "download" | "install" | "none";
@@ -2013,6 +2004,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
   props: SidebarProjectsContentProps,
 ) {
   const {
+    sidebarProjectByKey,
     showArm64IntelBuildWarning,
     arm64IntelBuildWarningDescription,
     desktopUpdateButtonAction,
@@ -2202,40 +2194,56 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 items={[...sortedProjectKeys]}
                 strategy={verticalListSortingStrategy}
               >
-                {sortedProjectKeys.map((projectKey) => (
-                  <SortableProjectItem key={projectKey} projectId={projectKey}>
-                    {(dragHandleProps) => (
-                      <SidebarProjectItem
-                        projectKey={projectKey}
-                        attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-                        dragInProgressRef={dragInProgressRef}
-                        suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-                        suppressProjectClickForContextMenuRef={
-                          suppressProjectClickForContextMenuRef
-                        }
-                        isManualProjectSorting={isManualProjectSorting}
-                        dragHandleProps={dragHandleProps}
-                      />
-                    )}
-                  </SortableProjectItem>
-                ))}
+                {sortedProjectKeys.map((projectKey) =>
+                  (() => {
+                    const project = sidebarProjectByKey.get(projectKey);
+                    if (!project) {
+                      return null;
+                    }
+                    return (
+                      <SortableProjectItem key={projectKey} projectId={projectKey}>
+                        {(dragHandleProps) => (
+                          <SidebarProjectItem
+                            project={project}
+                            attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+                            dragInProgressRef={dragInProgressRef}
+                            suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                            suppressProjectClickForContextMenuRef={
+                              suppressProjectClickForContextMenuRef
+                            }
+                            isManualProjectSorting={isManualProjectSorting}
+                            dragHandleProps={dragHandleProps}
+                          />
+                        )}
+                      </SortableProjectItem>
+                    );
+                  })(),
+                )}
               </SortableContext>
             </SidebarMenu>
           </DndContext>
         ) : (
           <SidebarMenu ref={attachProjectListAutoAnimateRef}>
-            {sortedProjectKeys.map((projectKey) => (
-              <SidebarProjectListRow
-                key={projectKey}
-                projectKey={projectKey}
-                attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-                dragInProgressRef={dragInProgressRef}
-                suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-                suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
-                isManualProjectSorting={isManualProjectSorting}
-                dragHandleProps={null}
-              />
-            ))}
+            {sortedProjectKeys.map((projectKey) =>
+              (() => {
+                const project = sidebarProjectByKey.get(projectKey);
+                if (!project) {
+                  return null;
+                }
+                return (
+                  <SidebarProjectListRow
+                    key={projectKey}
+                    project={project}
+                    attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+                    dragInProgressRef={dragInProgressRef}
+                    suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                    suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
+                    isManualProjectSorting={isManualProjectSorting}
+                    dragHandleProps={null}
+                  />
+                );
+              })(),
+            )}
           </SidebarMenu>
         )}
 
@@ -2536,11 +2544,10 @@ export default function Sidebar() {
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
 
   useEffect(() => {
-    syncSidebarProjectMappings({
-      projectSnapshotByKey: sidebarProjectByKey,
-      physicalToLogicalKey,
-    });
-  }, [physicalToLogicalKey, sidebarProjectByKey]);
+    return () => {
+      resetSidebarViewState();
+    };
+  }, []);
 
   useEffect(() => {
     const onMouseDown = (event: globalThis.MouseEvent) => {
@@ -2671,6 +2678,7 @@ export default function Sidebar() {
       />
       <SidebarKeyboardController
         navigateToThread={navigateToThread}
+        physicalToLogicalKey={physicalToLogicalKey}
         sidebarThreadSortOrder={sidebarThreadSortOrder}
       />
 
@@ -2679,6 +2687,7 @@ export default function Sidebar() {
       ) : (
         <>
           <SidebarProjectsContent
+            sidebarProjectByKey={sidebarProjectByKey}
             showArm64IntelBuildWarning={showArm64IntelBuildWarning}
             arm64IntelBuildWarningDescription={arm64IntelBuildWarningDescription}
             desktopUpdateButtonAction={desktopUpdateButtonAction}
