@@ -4,7 +4,6 @@ import { createStore } from "zustand/vanilla";
 import type { LogicalProjectKey } from "../../logicalProject";
 
 interface SidebarTransientState {
-  sortedProjectKeys: readonly LogicalProjectKey[];
   activeRouteThreadKey: string | null;
   activeRouteProjectKey: LogicalProjectKey | null;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
@@ -12,11 +11,9 @@ interface SidebarTransientState {
 }
 
 const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
-const EMPTY_SIDEBAR_PROJECT_KEYS: LogicalProjectKey[] = [];
 const EMPTY_EXPANDED_THREAD_LISTS_BY_PROJECT = new Set<LogicalProjectKey>();
 
 const sidebarViewStore = createStore<SidebarTransientState>(() => ({
-  sortedProjectKeys: EMPTY_SIDEBAR_PROJECT_KEYS,
   activeRouteThreadKey: null,
   activeRouteProjectKey: null,
   threadJumpLabelByKey: EMPTY_THREAD_JUMP_LABELS,
@@ -25,20 +22,11 @@ const sidebarViewStore = createStore<SidebarTransientState>(() => ({
 
 export function resetSidebarViewState(): void {
   sidebarViewStore.setState({
-    sortedProjectKeys: EMPTY_SIDEBAR_PROJECT_KEYS,
     activeRouteThreadKey: null,
     activeRouteProjectKey: null,
     threadJumpLabelByKey: EMPTY_THREAD_JUMP_LABELS,
     expandedThreadListsByProject: EMPTY_EXPANDED_THREAD_LISTS_BY_PROJECT,
   });
-}
-
-export function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-export function useSidebarProjectKeys(): readonly LogicalProjectKey[] {
-  return useZustandStore(sidebarViewStore, (state) => state.sortedProjectKeys);
 }
 
 export function useSidebarProjectThreadListExpanded(projectKey: LogicalProjectKey): boolean {
@@ -114,17 +102,6 @@ export function useSidebarProjectActiveRouteThreadKey(
       [projectKey],
     ),
   );
-}
-
-export function setSidebarProjectOrdering(sortedProjectKeys: readonly LogicalProjectKey[]): void {
-  const currentState = sidebarViewStore.getState();
-  if (stringArraysEqual(currentState.sortedProjectKeys, sortedProjectKeys)) {
-    return;
-  }
-
-  sidebarViewStore.setState({
-    sortedProjectKeys,
-  });
 }
 
 export function setSidebarKeyboardState(input: {

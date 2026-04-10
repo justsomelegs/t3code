@@ -13,7 +13,6 @@ import {
   type ThreadStatusLatestTurnSnapshot,
   type ThreadStatusSessionSnapshot,
 } from "../Sidebar.logic";
-import { THREAD_PREVIEW_LIMIT } from "./sidebarConstants";
 import type { AppState, EnvironmentState } from "../../store";
 import type { SidebarThreadSummary } from "../../types";
 import type { LogicalProjectKey } from "../../logicalProject";
@@ -400,59 +399,6 @@ export function createSidebarSortedThreadKeysByLogicalProjectSelector(input: {
 
     previousResult =
       nextResult.size === 0 ? EMPTY_SORTED_THREAD_KEYS_BY_LOGICAL_PROJECT : nextResult;
-    return previousResult;
-  };
-}
-
-export function createSidebarVisibleThreadKeysSelector(input: {
-  expandedThreadListsByProject: ReadonlySet<LogicalProjectKey>;
-  physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>;
-  projectExpandedStates: readonly boolean[];
-  sortedProjectKeys: readonly LogicalProjectKey[];
-  threadSortOrder: SidebarThreadSortOrder;
-  routeThreadKey: string | null;
-}): (state: AppState) => readonly string[] {
-  let previousResult: readonly string[] = EMPTY_PROJECT_THREAD_KEYS;
-  const sortedThreadKeysByLogicalProjectSelector =
-    createSidebarSortedThreadKeysByLogicalProjectSelector({
-      physicalToLogicalKey: input.physicalToLogicalKey,
-      threadSortOrder: input.threadSortOrder,
-    });
-
-  return (state) => {
-    const sortedThreadKeysByLogicalProject = sortedThreadKeysByLogicalProjectSelector(state);
-    const nextVisibleThreadKeys: string[] = [];
-
-    input.sortedProjectKeys.forEach((projectKey, index) => {
-      const projectThreadKeys = sortedThreadKeysByLogicalProject.get(projectKey) ?? [];
-      const projectExpanded = input.projectExpandedStates[index] ?? true;
-      const activeThreadKey = input.routeThreadKey ?? undefined;
-      const pinnedCollapsedThread =
-        !projectExpanded && activeThreadKey
-          ? (projectThreadKeys.find((threadKey) => threadKey === activeThreadKey) ?? null)
-          : null;
-      const shouldShowThreadPanel = projectExpanded || pinnedCollapsedThread !== null;
-      if (!shouldShowThreadPanel) {
-        return;
-      }
-
-      const isThreadListExpanded = input.expandedThreadListsByProject.has(projectKey);
-      const hasOverflowingThreads = projectThreadKeys.length > THREAD_PREVIEW_LIMIT;
-      const visibleProjectThreadKeys =
-        isThreadListExpanded || !hasOverflowingThreads
-          ? projectThreadKeys
-          : projectThreadKeys.slice(0, THREAD_PREVIEW_LIMIT);
-      nextVisibleThreadKeys.push(
-        ...(pinnedCollapsedThread ? [pinnedCollapsedThread] : visibleProjectThreadKeys),
-      );
-    });
-
-    if (stringArraysEqual(previousResult, nextVisibleThreadKeys)) {
-      return previousResult;
-    }
-
-    previousResult =
-      nextVisibleThreadKeys.length === 0 ? EMPTY_PROJECT_THREAD_KEYS : nextVisibleThreadKeys;
     return previousResult;
   };
 }
