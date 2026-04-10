@@ -8,10 +8,12 @@ import {
   scopeThreadRef,
 } from "@t3tools/client-runtime";
 import {
+  sortProjectsForSidebar,
   sortThreadsForSidebar,
   type ThreadStatusLatestTurnSnapshot,
   type ThreadStatusSessionSnapshot,
 } from "../Sidebar.logic";
+import { THREAD_PREVIEW_LIMIT } from "./sidebarConstants";
 import type { AppState, EnvironmentState } from "../../store";
 import type { SidebarThreadSummary } from "../../types";
 import type { LogicalProjectKey } from "../../logicalProject";
@@ -30,6 +32,7 @@ const EMPTY_PROJECT_ORDERING_THREAD_SNAPSHOTS: SidebarProjectOrderingThreadSnaps
 const EMPTY_PROJECT_THREAD_KEYS: string[] = [];
 const EMPTY_PROJECT_THREAD_STATUS_INPUTS: ProjectThreadStatusInput[] = [];
 const EMPTY_SORTED_THREAD_KEYS_BY_LOGICAL_PROJECT = new Map<LogicalProjectKey, readonly string[]>();
+const EMPTY_SORTED_PROJECT_KEYS: LogicalProjectKey[] = [];
 
 function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -283,6 +286,54 @@ export function createSidebarProjectOrderingThreadSnapshotsSelector(input: {
   };
 }
 
+export function createSidebarSortedProjectKeysSelector(input: {
+  physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>;
+  projects: ReadonlyArray<{
+    projectKey: LogicalProjectKey;
+    name: string;
+    createdAt?: string | undefined;
+    updatedAt?: string | undefined;
+  }>;
+  sortOrder: SidebarProjectSortOrder;
+}): (state: AppState) => readonly LogicalProjectKey[] {
+  let previousResult: readonly LogicalProjectKey[] = EMPTY_SORTED_PROJECT_KEYS;
+  const orderingThreadSelector = createSidebarProjectOrderingThreadSnapshotsSelector({
+    physicalToLogicalKey: input.physicalToLogicalKey,
+    sortOrder: input.sortOrder,
+  });
+
+  return (state) => {
+    const manualProjectKeys = input.projects.map((project) => project.projectKey);
+    if (input.sortOrder === "manual") {
+      if (stringArraysEqual(previousResult, manualProjectKeys)) {
+        return previousResult;
+      }
+      previousResult =
+        manualProjectKeys.length === 0 ? EMPTY_SORTED_PROJECT_KEYS : manualProjectKeys;
+      return previousResult;
+    }
+
+    const sortableProjects = input.projects.map((project) => ({
+      id: project.projectKey,
+      name: project.name,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    }));
+    const sortedProjectKeys = sortProjectsForSidebar(
+      sortableProjects,
+      orderingThreadSelector(state),
+      input.sortOrder,
+    ).map((project) => project.id);
+
+    if (stringArraysEqual(previousResult, sortedProjectKeys)) {
+      return previousResult;
+    }
+
+    previousResult = sortedProjectKeys.length === 0 ? EMPTY_SORTED_PROJECT_KEYS : sortedProjectKeys;
+    return previousResult;
+  };
+}
+
 export function createSidebarSortedThreadKeysByLogicalProjectSelector(input: {
   physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>;
   threadSortOrder: SidebarThreadSortOrder;
@@ -349,6 +400,59 @@ export function createSidebarSortedThreadKeysByLogicalProjectSelector(input: {
 
     previousResult =
       nextResult.size === 0 ? EMPTY_SORTED_THREAD_KEYS_BY_LOGICAL_PROJECT : nextResult;
+    return previousResult;
+  };
+}
+
+export function createSidebarVisibleThreadKeysSelector(input: {
+  expandedThreadListsByProject: ReadonlySet<LogicalProjectKey>;
+  physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>;
+  projectExpandedStates: readonly boolean[];
+  sortedProjectKeys: readonly LogicalProjectKey[];
+  threadSortOrder: SidebarThreadSortOrder;
+  routeThreadKey: string | null;
+}): (state: AppState) => readonly string[] {
+  let previousResult: readonly string[] = EMPTY_PROJECT_THREAD_KEYS;
+  const sortedThreadKeysByLogicalProjectSelector =
+    createSidebarSortedThreadKeysByLogicalProjectSelector({
+      physicalToLogicalKey: input.physicalToLogicalKey,
+      threadSortOrder: input.threadSortOrder,
+    });
+
+  return (state) => {
+    const sortedThreadKeysByLogicalProject = sortedThreadKeysByLogicalProjectSelector(state);
+    const nextVisibleThreadKeys: string[] = [];
+
+    input.sortedProjectKeys.forEach((projectKey, index) => {
+      const projectThreadKeys = sortedThreadKeysByLogicalProject.get(projectKey) ?? [];
+      const projectExpanded = input.projectExpandedStates[index] ?? true;
+      const activeThreadKey = input.routeThreadKey ?? undefined;
+      const pinnedCollapsedThread =
+        !projectExpanded && activeThreadKey
+          ? (projectThreadKeys.find((threadKey) => threadKey === activeThreadKey) ?? null)
+          : null;
+      const shouldShowThreadPanel = projectExpanded || pinnedCollapsedThread !== null;
+      if (!shouldShowThreadPanel) {
+        return;
+      }
+
+      const isThreadListExpanded = input.expandedThreadListsByProject.has(projectKey);
+      const hasOverflowingThreads = projectThreadKeys.length > THREAD_PREVIEW_LIMIT;
+      const visibleProjectThreadKeys =
+        isThreadListExpanded || !hasOverflowingThreads
+          ? projectThreadKeys
+          : projectThreadKeys.slice(0, THREAD_PREVIEW_LIMIT);
+      nextVisibleThreadKeys.push(
+        ...(pinnedCollapsedThread ? [pinnedCollapsedThread] : visibleProjectThreadKeys),
+      );
+    });
+
+    if (stringArraysEqual(previousResult, nextVisibleThreadKeys)) {
+      return previousResult;
+    }
+
+    previousResult =
+      nextVisibleThreadKeys.length === 0 ? EMPTY_PROJECT_THREAD_KEYS : nextVisibleThreadKeys;
     return previousResult;
   };
 }

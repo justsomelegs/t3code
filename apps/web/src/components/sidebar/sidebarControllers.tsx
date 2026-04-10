@@ -3,6 +3,7 @@ import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime";
 import { useParams } from "@tanstack/react-router";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import { useShallow } from "zustand/react/shallow";
 import { isTerminalFocused } from "../../lib/terminalFocus";
 import { resolveThreadRouteRef } from "../../threadRoutes";
 import {
@@ -17,15 +18,14 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../../terminal
 import { useUiStateStore } from "../../uiStateStore";
 import {
   resolveAdjacentThreadId,
-  sortProjectsForSidebar,
+  shouldClearThreadSelectionOnMouseDown,
   useThreadJumpHintVisibility,
 } from "../Sidebar.logic";
 import {
   createSidebarActiveRouteProjectKeySelectorByRef,
-  createSidebarProjectOrderingThreadSnapshotsSelector,
-  createSidebarSortedThreadKeysByLogicalProjectSelector,
+  createSidebarSortedProjectKeysSelector,
+  createSidebarVisibleThreadKeysSelector,
 } from "./sidebarSelectors";
-import { THREAD_PREVIEW_LIMIT } from "./sidebarConstants";
 import type { LogicalProjectKey } from "../../logicalProject";
 import {
   setSidebarKeyboardState,
@@ -36,6 +36,7 @@ import {
 import type { SidebarProjectSnapshot } from "./sidebarProjectSnapshots";
 import { useServerKeybindings } from "../../rpc/serverState";
 import { useStore } from "../../store";
+import { useThreadSelectionStore } from "../../threadSelectionStore";
 
 const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
 
@@ -70,56 +71,53 @@ function buildThreadJumpLabelMap(input: {
 }
 
 function useSidebarKeyboardController(input: {
+  physicalToLogicalKey: ReadonlyMap<string, LogicalProjectKey>;
   sortedProjectKeys: readonly LogicalProjectKey[];
-  sortedThreadKeysByLogicalProject: ReadonlyMap<LogicalProjectKey, readonly string[]>;
   expandedThreadListsByProject: ReadonlySet<LogicalProjectKey>;
   routeThreadRef: ScopedThreadRef | null;
   routeThreadKey: string | null;
   platform: string;
   keybindings: ReturnType<typeof useServerKeybindings>;
   navigateToThread: (threadRef: ScopedThreadRef) => void;
+  threadSortOrder: SidebarThreadSortOrder;
 }) {
   const {
+    physicalToLogicalKey,
     sortedProjectKeys,
-    sortedThreadKeysByLogicalProject,
     expandedThreadListsByProject,
     routeThreadRef,
     routeThreadKey,
     platform,
     keybindings,
     navigateToThread,
+    threadSortOrder,
   } = input;
-  const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
+  const projectExpandedStates = useUiStateStore(
+    useShallow((store) =>
+      sortedProjectKeys.map((projectKey) => store.projectExpandedById[projectKey] ?? true),
+    ),
+  );
   const { showThreadJumpHints, updateThreadJumpHintsVisibility } = useThreadJumpHintVisibility();
-  const visibleSidebarThreadKeys = useMemo(
-    () =>
-      sortedProjectKeys.flatMap((projectKey) => {
-        const projectThreadKeys = sortedThreadKeysByLogicalProject.get(projectKey) ?? [];
-        const projectExpanded = projectExpandedById[projectKey] ?? true;
-        const activeThreadKey = routeThreadKey ?? undefined;
-        const pinnedCollapsedThread =
-          !projectExpanded && activeThreadKey
-            ? (projectThreadKeys.find((threadKey) => threadKey === activeThreadKey) ?? null)
-            : null;
-        const shouldShowThreadPanel = projectExpanded || pinnedCollapsedThread !== null;
-        if (!shouldShowThreadPanel) {
-          return [];
-        }
-        const isThreadListExpanded = expandedThreadListsByProject.has(projectKey);
-        const hasOverflowingThreads = projectThreadKeys.length > THREAD_PREVIEW_LIMIT;
-        const previewThreads =
-          isThreadListExpanded || !hasOverflowingThreads
-            ? projectThreadKeys
-            : projectThreadKeys.slice(0, THREAD_PREVIEW_LIMIT);
-        return pinnedCollapsedThread ? [pinnedCollapsedThread] : previewThreads;
-      }),
-    [
-      expandedThreadListsByProject,
-      projectExpandedById,
-      routeThreadKey,
-      sortedProjectKeys,
-      sortedThreadKeysByLogicalProject,
-    ],
+  const visibleSidebarThreadKeys = useStore(
+    useMemo(
+      () =>
+        createSidebarVisibleThreadKeysSelector({
+          expandedThreadListsByProject,
+          physicalToLogicalKey,
+          projectExpandedStates,
+          routeThreadKey,
+          sortedProjectKeys,
+          threadSortOrder,
+        }),
+      [
+        expandedThreadListsByProject,
+        physicalToLogicalKey,
+        projectExpandedStates,
+        routeThreadKey,
+        sortedProjectKeys,
+        threadSortOrder,
+      ],
+    ),
   );
   const threadJumpCommandByKey = useMemo(() => {
     const mapping = new Map<string, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
@@ -333,6 +331,35 @@ function useSidebarKeyboardController(input: {
   return threadJumpLabelByKey;
 }
 
+export const SidebarSelectionController = memo(function SidebarSelectionController() {
+  const selectedThreadCount = useThreadSelectionStore((state) => state.selectedThreadKeys.size);
+  const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
+  const selectedThreadCountRef = useRef(selectedThreadCount);
+  selectedThreadCountRef.current = selectedThreadCount;
+  const clearSelectionRef = useRef(clearSelection);
+  clearSelectionRef.current = clearSelection;
+
+  useEffect(() => {
+    const onMouseDown = (event: globalThis.MouseEvent) => {
+      if (selectedThreadCountRef.current === 0) {
+        return;
+      }
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (!shouldClearThreadSelectionOnMouseDown(target)) {
+        return;
+      }
+      clearSelectionRef.current();
+    };
+
+    window.addEventListener("mousedown", onMouseDown);
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown);
+    };
+  }, []);
+
+  return null;
+});
+
 export const SidebarProjectOrderingController = memo(
   function SidebarProjectOrderingController(props: {
     sidebarProjects: readonly SidebarProjectSnapshot[];
@@ -340,29 +367,17 @@ export const SidebarProjectOrderingController = memo(
     sidebarProjectSortOrder: SidebarProjectSortOrder;
   }) {
     const { sidebarProjects, physicalToLogicalKey, sidebarProjectSortOrder } = props;
-    const orderingThreads = useStore(
+    const sortedProjectKeys = useStore(
       useMemo(
         () =>
-          createSidebarProjectOrderingThreadSnapshotsSelector({
+          createSidebarSortedProjectKeysSelector({
             physicalToLogicalKey,
+            projects: sidebarProjects,
             sortOrder: sidebarProjectSortOrder,
           }),
-        [physicalToLogicalKey, sidebarProjectSortOrder],
+        [physicalToLogicalKey, sidebarProjectSortOrder, sidebarProjects],
       ),
     );
-    const sortedProjectKeys = useMemo(() => {
-      if (sidebarProjectSortOrder === "manual") {
-        return sidebarProjects.map((project) => project.projectKey);
-      }
-
-      const sortableProjects = sidebarProjects.map((project) => ({
-        ...project,
-        id: project.projectKey,
-      }));
-      return sortProjectsForSidebar(sortableProjects, orderingThreads, sidebarProjectSortOrder).map(
-        (project) => project.id,
-      );
-    }, [orderingThreads, sidebarProjectSortOrder, sidebarProjects]);
 
     useEffect(() => {
       setSidebarProjectOrdering(sortedProjectKeys);
@@ -380,16 +395,6 @@ export const SidebarKeyboardController = memo(function SidebarKeyboardController
   const { navigateToThread, physicalToLogicalKey, sidebarThreadSortOrder } = props;
   const sortedProjectKeys = useSidebarProjectKeys();
   const expandedThreadListsByProject = useSidebarExpandedThreadListsByProject();
-  const sortedThreadKeysByLogicalProject = useStore(
-    useMemo(
-      () =>
-        createSidebarSortedThreadKeysByLogicalProjectSelector({
-          physicalToLogicalKey,
-          threadSortOrder: sidebarThreadSortOrder,
-        }),
-      [physicalToLogicalKey, sidebarThreadSortOrder],
-    ),
-  );
   const routeThreadRef = useParams({
     strict: false,
     select: (params) => resolveThreadRouteRef(params),
@@ -404,14 +409,15 @@ export const SidebarKeyboardController = memo(function SidebarKeyboardController
   const keybindings = useServerKeybindings();
   const platform = navigator.platform;
   const threadJumpLabelByKey = useSidebarKeyboardController({
+    physicalToLogicalKey,
     sortedProjectKeys,
-    sortedThreadKeysByLogicalProject,
     expandedThreadListsByProject,
     routeThreadRef,
     routeThreadKey,
     platform,
     keybindings,
     navigateToThread,
+    threadSortOrder: sidebarThreadSortOrder,
   });
 
   useEffect(() => {

@@ -115,7 +115,6 @@ import {
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   orderItemsByPreferredIds,
-  shouldClearThreadSelectionOnMouseDown,
   sortThreadsForSidebar,
   ThreadStatusPill,
 } from "./Sidebar.logic";
@@ -131,6 +130,7 @@ import { THREAD_PREVIEW_LIMIT } from "./sidebar/sidebarConstants";
 import {
   SidebarKeyboardController,
   SidebarProjectOrderingController,
+  SidebarSelectionController,
 } from "./sidebar/sidebarControllers";
 import {
   collapseSidebarProjectThreadList,
@@ -2282,7 +2282,6 @@ export default function Sidebar() {
   const suppressProjectClickAfterDragRef = useRef(false);
   const suppressProjectClickForContextMenuRef = useRef(false);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
-  const selectedThreadCount = useThreadSelectionStore((s) => s.selectedThreadKeys.size);
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const isLinuxDesktop = isElectron && isLinuxPlatform(navigator.platform);
@@ -2550,20 +2549,6 @@ export default function Sidebar() {
   }, []);
 
   useEffect(() => {
-    const onMouseDown = (event: globalThis.MouseEvent) => {
-      if (selectedThreadCount === 0) return;
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      if (!shouldClearThreadSelectionOnMouseDown(target)) return;
-      clearSelection();
-    };
-
-    window.addEventListener("mousedown", onMouseDown);
-    return () => {
-      window.removeEventListener("mousedown", onMouseDown);
-    };
-  }, [clearSelection, selectedThreadCount]);
-
-  useEffect(() => {
     if (!isElectron) return;
     const bridge = window.desktopBridge;
     if (
@@ -2676,6 +2661,7 @@ export default function Sidebar() {
         physicalToLogicalKey={physicalToLogicalKey}
         sidebarProjectSortOrder={sidebarProjectSortOrder}
       />
+      <SidebarSelectionController />
       <SidebarKeyboardController
         navigateToThread={navigateToThread}
         physicalToLogicalKey={physicalToLogicalKey}
