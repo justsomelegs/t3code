@@ -14,8 +14,6 @@ import {
 import { ProjectFavicon } from "./ProjectFavicon";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
-import { useStore as useZustandStore } from "zustand";
-import { createStore } from "zustand/vanilla";
 import { useShallow } from "zustand/react/shallow";
 import {
   DndContext,
@@ -37,7 +35,6 @@ import {
   type DesktopUpdateState,
   type EnvironmentId,
   ProjectId,
-  type ScopedProjectRef,
   type ScopedThreadRef,
   type ThreadEnvMode,
   ThreadId,
@@ -50,7 +47,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime";
-import { Link, useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import {
   type SidebarProjectSortOrder,
   type SidebarThreadSortOrder,
@@ -58,7 +55,6 @@ import {
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
-import { isTerminalFocused } from "../lib/terminalFocus";
 import { isLinuxPlatform, isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
 import {
   selectProjectByRef,
@@ -71,25 +67,14 @@ import {
 } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
-import {
-  resolveShortcutCommand,
-  shortcutLabelForCommand,
-  shouldShowThreadJumpHints,
-  threadJumpCommandForIndex,
-  threadJumpIndexFromCommand,
-  threadTraversalDirectionFromCommand,
-} from "../keybindings";
+import { shortcutLabelForCommand } from "../keybindings";
 import { useGitStatus } from "../lib/gitStatusState";
 import { readLocalApi } from "../localApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 
 import { useThreadActions } from "../hooks/useThreadActions";
-import {
-  buildThreadRouteParams,
-  resolveThreadRouteRef,
-  resolveThreadRouteTarget,
-} from "../threadRoutes";
+import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import { toastManager } from "./ui/toast";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
@@ -123,7 +108,6 @@ import {
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
-  resolveAdjacentThreadId,
   isContextMenuPointerDown,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
@@ -132,9 +116,7 @@ import {
   resolveThreadStatusPill,
   orderItemsByPreferredIds,
   shouldClearThreadSelectionOnMouseDown,
-  sortProjectsForSidebar,
   sortThreadsForSidebar,
-  useThreadJumpHintVisibility,
   ThreadStatusPill,
 } from "./Sidebar.logic";
 import {
@@ -142,10 +124,26 @@ import {
   createSidebarProjectThreadStatusInputsSelector,
   createSidebarThreadRowSnapshotSelectorByRef,
   createSidebarThreadStatusInputSelectorByRef,
-  createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector,
   type ProjectThreadStatusInput,
-  type SidebarThreadSortSnapshot,
 } from "./sidebar/sidebarSelectors";
+import { THREAD_PREVIEW_LIMIT } from "./sidebar/sidebarConstants";
+import {
+  SidebarKeyboardController,
+  SidebarProjectOrderingController,
+} from "./sidebar/sidebarControllers";
+import {
+  collapseSidebarProjectThreadList,
+  expandSidebarProjectThreadList,
+  sidebarProjectSnapshotsEqual,
+  syncSidebarProjectMappings,
+  useSidebarIsActiveThread,
+  useSidebarProjectActiveRouteThreadKey,
+  useSidebarProjectKeys,
+  useSidebarProjectSnapshot,
+  useSidebarProjectThreadListExpanded,
+  useSidebarThreadJumpLabel,
+  type SidebarProjectSnapshot,
+} from "./sidebar/sidebarViewStore";
 import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { readEnvironmentApi } from "../environmentApi";
@@ -157,7 +155,6 @@ import {
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
 import type { Project } from "../types";
-const THREAD_PREVIEW_LIMIT = 6;
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -171,194 +168,6 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
   easing: "ease-out",
 } as const;
-const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
-const EMPTY_SIDEBAR_PROJECT_KEYS: string[] = [];
-const EMPTY_SIDEBAR_PROJECT_SNAPSHOT_BY_KEY = new Map<string, SidebarProjectSnapshot>();
-const EMPTY_EXPANDED_THREAD_LISTS_BY_PROJECT = new Set<string>();
-
-interface SidebarTransientState {
-  sortedProjectKeys: readonly string[];
-  projectSnapshotByKey: ReadonlyMap<string, SidebarProjectSnapshot>;
-  physicalToLogicalKey: ReadonlyMap<string, string>;
-  activeRouteThreadKey: string | null;
-  activeRouteProjectKey: string | null;
-  threadJumpLabelByKey: ReadonlyMap<string, string>;
-  expandedThreadListsByProject: ReadonlySet<string>;
-}
-
-const sidebarTransientStore = createStore<SidebarTransientState>(() => ({
-  sortedProjectKeys: EMPTY_SIDEBAR_PROJECT_KEYS,
-  projectSnapshotByKey: EMPTY_SIDEBAR_PROJECT_SNAPSHOT_BY_KEY,
-  physicalToLogicalKey: new Map<string, string>(),
-  activeRouteThreadKey: null,
-  activeRouteProjectKey: null,
-  threadJumpLabelByKey: EMPTY_THREAD_JUMP_LABELS,
-  expandedThreadListsByProject: EMPTY_EXPANDED_THREAD_LISTS_BY_PROJECT,
-}));
-
-function useSidebarProjectKeys(): readonly string[] {
-  return useZustandStore(sidebarTransientStore, (state) => state.sortedProjectKeys);
-}
-
-function useSidebarPhysicalToLogicalKey(): ReadonlyMap<string, string> {
-  return useZustandStore(sidebarTransientStore, (state) => state.physicalToLogicalKey);
-}
-
-function useSidebarProjectSnapshot(projectKey: string): SidebarProjectSnapshot | null {
-  return useZustandStore(
-    sidebarTransientStore,
-    useCallback(
-      (state: SidebarTransientState) => state.projectSnapshotByKey.get(projectKey) ?? null,
-      [projectKey],
-    ),
-  );
-}
-
-function useSidebarProjectThreadListExpanded(projectKey: string): boolean {
-  return useZustandStore(
-    sidebarTransientStore,
-    useCallback(
-      (state: SidebarTransientState) => state.expandedThreadListsByProject.has(projectKey),
-      [projectKey],
-    ),
-  );
-}
-
-function expandSidebarProjectThreadList(projectKey: string): void {
-  const { expandedThreadListsByProject } = sidebarTransientStore.getState();
-  if (expandedThreadListsByProject.has(projectKey)) {
-    return;
-  }
-
-  sidebarTransientStore.setState({
-    expandedThreadListsByProject: new Set([...expandedThreadListsByProject, projectKey]),
-  });
-}
-
-function collapseSidebarProjectThreadList(projectKey: string): void {
-  const { expandedThreadListsByProject } = sidebarTransientStore.getState();
-  if (!expandedThreadListsByProject.has(projectKey)) {
-    return;
-  }
-
-  const nextExpandedThreadListsByProject = new Set(expandedThreadListsByProject);
-  nextExpandedThreadListsByProject.delete(projectKey);
-  sidebarTransientStore.setState({
-    expandedThreadListsByProject:
-      nextExpandedThreadListsByProject.size === 0
-        ? EMPTY_EXPANDED_THREAD_LISTS_BY_PROJECT
-        : nextExpandedThreadListsByProject,
-  });
-}
-
-function useSidebarIsActiveThread(threadKey: string): boolean {
-  return useZustandStore(
-    sidebarTransientStore,
-    useCallback(
-      (state: SidebarTransientState) => state.activeRouteThreadKey === threadKey,
-      [threadKey],
-    ),
-  );
-}
-
-function useSidebarThreadJumpLabel(threadKey: string): string | null {
-  return useZustandStore(
-    sidebarTransientStore,
-    useCallback(
-      (state: SidebarTransientState) => state.threadJumpLabelByKey.get(threadKey) ?? null,
-      [threadKey],
-    ),
-  );
-}
-
-function useSidebarProjectActiveRouteThreadKey(projectKey: string): string | null {
-  return useZustandStore(
-    sidebarTransientStore,
-    useCallback(
-      (state: SidebarTransientState) => {
-        return state.activeRouteProjectKey === projectKey ? state.activeRouteThreadKey : null;
-      },
-      [projectKey],
-    ),
-  );
-}
-
-function buildThreadJumpLabelMap(input: {
-  keybindings: ReturnType<typeof useServerKeybindings>;
-  platform: string;
-  terminalOpen: boolean;
-  threadJumpCommandByKey: ReadonlyMap<
-    string,
-    NonNullable<ReturnType<typeof threadJumpCommandForIndex>>
-  >;
-}): ReadonlyMap<string, string> {
-  if (input.threadJumpCommandByKey.size === 0) {
-    return EMPTY_THREAD_JUMP_LABELS;
-  }
-
-  const shortcutLabelOptions = {
-    platform: input.platform,
-    context: {
-      terminalFocus: false,
-      terminalOpen: input.terminalOpen,
-    },
-  } as const;
-  const mapping = new Map<string, string>();
-  for (const [threadKey, command] of input.threadJumpCommandByKey) {
-    const label = shortcutLabelForCommand(input.keybindings, command, shortcutLabelOptions);
-    if (label) {
-      mapping.set(threadKey, label);
-    }
-  }
-  return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
-}
-
-type EnvironmentPresence = "local-only" | "remote-only" | "mixed";
-
-type SidebarProjectSnapshot = Project & {
-  projectKey: string;
-  environmentPresence: EnvironmentPresence;
-  memberProjectRefs: readonly ScopedProjectRef[];
-  /** Labels for remote environments this project lives in. */
-  remoteEnvironmentLabels: readonly string[];
-};
-
-function refsEqual(left: readonly ScopedProjectRef[], right: readonly ScopedProjectRef[]): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (ref, index) =>
-        ref.environmentId === right[index]?.environmentId &&
-        ref.projectId === right[index]?.projectId,
-    )
-  );
-}
-
-function stringsEqual(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function sidebarProjectSnapshotsEqual(
-  left: SidebarProjectSnapshot | undefined,
-  right: SidebarProjectSnapshot,
-): boolean {
-  return (
-    left !== undefined &&
-    left.id === right.id &&
-    left.environmentId === right.environmentId &&
-    left.name === right.name &&
-    left.cwd === right.cwd &&
-    left.repositoryIdentity === right.repositoryIdentity &&
-    left.defaultModelSelection === right.defaultModelSelection &&
-    left.createdAt === right.createdAt &&
-    left.updatedAt === right.updatedAt &&
-    left.scripts === right.scripts &&
-    left.projectKey === right.projectKey &&
-    left.environmentPresence === right.environmentPresence &&
-    refsEqual(left.memberProjectRefs, right.memberProjectRefs) &&
-    stringsEqual(left.remoteEnvironmentLabels, right.remoteEnvironmentLabels)
-  );
-}
 
 interface TerminalStatusIndicator {
   label: "Terminal process running";
@@ -1055,14 +864,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 
       if (isShiftClick) {
         event.preventDefault();
-        const projectSnapshot = sidebarTransientStore
-          .getState()
-          .projectSnapshotByKey.get(projectKey);
-        const orderedProjectThreadKeys = projectSnapshot
+        const orderedProjectThreadKeys = project
           ? sortThreadsForSidebar(
               selectSidebarThreadsForProjectRefs(
                 useStore.getState(),
-                projectSnapshot.memberProjectRefs,
+                project.memberProjectRefs,
               ).filter((projectThread) => projectThread.archivedAt === null),
               threadSortOrder,
             ).map((projectThread) =>
@@ -1081,7 +887,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     [
       clearSelection,
       navigateToThread,
-      projectKey,
+      project,
       rangeSelectTo,
       threadKey,
       threadRef,
@@ -2447,407 +2253,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
   );
 });
 
-function useSidebarKeyboardController(props: {
-  sortedProjectKeys: readonly string[];
-  sidebarThreadSortSnapshots: readonly SidebarThreadSortSnapshot[];
-  physicalToLogicalKey: ReadonlyMap<string, string>;
-  expandedThreadListsByProject: ReadonlySet<string>;
-  routeThreadRef: ScopedThreadRef | null;
-  routeThreadKey: string | null;
-  platform: string;
-  keybindings: ReturnType<typeof useServerKeybindings>;
-  navigateToThread: (threadRef: ScopedThreadRef) => void;
-  sidebarThreadSortOrder: SidebarThreadSortOrder;
-}) {
-  const {
-    sortedProjectKeys,
-    sidebarThreadSortSnapshots,
-    physicalToLogicalKey,
-    expandedThreadListsByProject,
-    routeThreadRef,
-    routeThreadKey,
-    platform,
-    keybindings,
-    navigateToThread,
-    sidebarThreadSortOrder,
-  } = props;
-  const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
-  const { showThreadJumpHints, updateThreadJumpHintsVisibility } = useThreadJumpHintVisibility();
-  const sidebarThreadSnapshotByKey = useMemo(
-    () =>
-      new Map(
-        sidebarThreadSortSnapshots.map(
-          (thread) =>
-            [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
-        ),
-      ),
-    [sidebarThreadSortSnapshots],
-  );
-  const threadsByProjectKey = useMemo(() => {
-    const next = new Map<string, SidebarThreadSortSnapshot[]>();
-    for (const thread of sidebarThreadSortSnapshots) {
-      const physicalKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-      const logicalKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
-      const existing = next.get(logicalKey);
-      if (existing) {
-        existing.push(thread);
-      } else {
-        next.set(logicalKey, [thread]);
-      }
-    }
-    return next;
-  }, [physicalToLogicalKey, sidebarThreadSortSnapshots]);
-  const visibleSidebarThreadKeys = useMemo(
-    () =>
-      sortedProjectKeys.flatMap((projectKey) => {
-        const projectThreads = sortThreadsForSidebar(
-          (threadsByProjectKey.get(projectKey) ?? []).filter(
-            (thread) => thread.archivedAt === null,
-          ),
-          sidebarThreadSortOrder,
-        );
-        const projectExpanded = projectExpandedById[projectKey] ?? true;
-        const activeThreadKey = routeThreadKey ?? undefined;
-        const pinnedCollapsedThread =
-          !projectExpanded && activeThreadKey
-            ? (projectThreads.find(
-                (thread) =>
-                  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
-                  activeThreadKey,
-              ) ?? null)
-            : null;
-        const shouldShowThreadPanel = projectExpanded || pinnedCollapsedThread !== null;
-        if (!shouldShowThreadPanel) {
-          return [];
-        }
-        const isThreadListExpanded = expandedThreadListsByProject.has(projectKey);
-        const hasOverflowingThreads = projectThreads.length > THREAD_PREVIEW_LIMIT;
-        const previewThreads =
-          isThreadListExpanded || !hasOverflowingThreads
-            ? projectThreads
-            : projectThreads.slice(0, THREAD_PREVIEW_LIMIT);
-        const renderedThreads = pinnedCollapsedThread ? [pinnedCollapsedThread] : previewThreads;
-        return renderedThreads.map((thread) =>
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        );
-      }),
-    [
-      expandedThreadListsByProject,
-      projectExpandedById,
-      routeThreadKey,
-      sidebarThreadSortOrder,
-      sortedProjectKeys,
-      threadsByProjectKey,
-    ],
-  );
-  const threadJumpCommandByKey = useMemo(() => {
-    const mapping = new Map<string, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
-    for (const [visibleThreadIndex, threadKey] of visibleSidebarThreadKeys.entries()) {
-      const jumpCommand = threadJumpCommandForIndex(visibleThreadIndex);
-      if (!jumpCommand) {
-        return mapping;
-      }
-      mapping.set(threadKey, jumpCommand);
-    }
-
-    return mapping;
-  }, [visibleSidebarThreadKeys]);
-  const threadJumpThreadKeys = useMemo(
-    () => [...threadJumpCommandByKey.keys()],
-    [threadJumpCommandByKey],
-  );
-  const getCurrentSidebarShortcutContext = useCallback(
-    () => ({
-      terminalFocus: isTerminalFocused(),
-      terminalOpen: routeThreadRef
-        ? selectThreadTerminalState(
-            useTerminalStateStore.getState().terminalStateByThreadKey,
-            routeThreadRef,
-          ).terminalOpen
-        : false,
-    }),
-    [routeThreadRef],
-  );
-  const threadJumpLabelByKey = useMemo(
-    () =>
-      showThreadJumpHints
-        ? buildThreadJumpLabelMap({
-            keybindings,
-            platform,
-            terminalOpen: getCurrentSidebarShortcutContext().terminalOpen,
-            threadJumpCommandByKey,
-          })
-        : EMPTY_THREAD_JUMP_LABELS,
-    [
-      getCurrentSidebarShortcutContext,
-      keybindings,
-      platform,
-      showThreadJumpHints,
-      threadJumpCommandByKey,
-    ],
-  );
-  const threadJumpLabelsRef = useRef<ReadonlyMap<string, string>>(threadJumpLabelByKey);
-  threadJumpLabelsRef.current = threadJumpLabelByKey;
-  const showThreadJumpHintsRef = useRef(showThreadJumpHints);
-  showThreadJumpHintsRef.current = showThreadJumpHints;
-
-  useEffect(() => {
-    const clearThreadJumpHints = () => {
-      updateThreadJumpHintsVisibility(false);
-    };
-    const shouldIgnoreThreadJumpHintUpdate = (event: globalThis.KeyboardEvent) =>
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.shiftKey &&
-      event.key !== "Meta" &&
-      event.key !== "Control" &&
-      event.key !== "Alt" &&
-      event.key !== "Shift" &&
-      !showThreadJumpHintsRef.current &&
-      threadJumpLabelsRef.current === EMPTY_THREAD_JUMP_LABELS;
-
-    const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (shouldIgnoreThreadJumpHintUpdate(event)) {
-        return;
-      }
-
-      const shortcutContext = getCurrentSidebarShortcutContext();
-      const shouldShowHints = shouldShowThreadJumpHints(event, keybindings, {
-        platform,
-        context: shortcutContext,
-      });
-      if (!shouldShowHints) {
-        if (
-          showThreadJumpHintsRef.current ||
-          threadJumpLabelsRef.current !== EMPTY_THREAD_JUMP_LABELS
-        ) {
-          clearThreadJumpHints();
-        }
-      } else {
-        updateThreadJumpHintsVisibility(true);
-      }
-
-      if (event.defaultPrevented || event.repeat) {
-        return;
-      }
-
-      const command = resolveShortcutCommand(event, keybindings, {
-        platform,
-        context: shortcutContext,
-      });
-      const traversalDirection = threadTraversalDirectionFromCommand(command);
-      if (traversalDirection !== null) {
-        const targetThreadKey = resolveAdjacentThreadId({
-          threadIds: visibleSidebarThreadKeys,
-          currentThreadId: routeThreadKey,
-          direction: traversalDirection,
-        });
-        if (!targetThreadKey) {
-          return;
-        }
-        const targetThread = sidebarThreadSnapshotByKey.get(targetThreadKey);
-        if (!targetThread) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-        navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
-        return;
-      }
-
-      const jumpIndex = threadJumpIndexFromCommand(command ?? "");
-      if (jumpIndex === null) {
-        return;
-      }
-
-      const targetThreadKey = threadJumpThreadKeys[jumpIndex];
-      if (!targetThreadKey) {
-        return;
-      }
-      const targetThread = sidebarThreadSnapshotByKey.get(targetThreadKey);
-      if (!targetThread) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
-    };
-
-    const onWindowKeyUp = (event: globalThis.KeyboardEvent) => {
-      if (shouldIgnoreThreadJumpHintUpdate(event)) {
-        return;
-      }
-
-      const shortcutContext = getCurrentSidebarShortcutContext();
-      const shouldShowHints = shouldShowThreadJumpHints(event, keybindings, {
-        platform,
-        context: shortcutContext,
-      });
-      if (!shouldShowHints) {
-        clearThreadJumpHints();
-        return;
-      }
-      updateThreadJumpHintsVisibility(true);
-    };
-
-    const onWindowBlur = () => {
-      clearThreadJumpHints();
-    };
-
-    window.addEventListener("keydown", onWindowKeyDown);
-    window.addEventListener("keyup", onWindowKeyUp);
-    window.addEventListener("blur", onWindowBlur);
-
-    return () => {
-      window.removeEventListener("keydown", onWindowKeyDown);
-      window.removeEventListener("keyup", onWindowKeyUp);
-      window.removeEventListener("blur", onWindowBlur);
-    };
-  }, [
-    getCurrentSidebarShortcutContext,
-    keybindings,
-    navigateToThread,
-    platform,
-    routeThreadKey,
-    sidebarThreadSnapshotByKey,
-    threadJumpCommandByKey,
-    threadJumpThreadKeys,
-    updateThreadJumpHintsVisibility,
-    visibleSidebarThreadKeys,
-  ]);
-
-  return threadJumpLabelByKey;
-}
-
-const SidebarProjectOrderingController = memo(function SidebarProjectOrderingController(props: {
-  sidebarProjects: readonly SidebarProjectSnapshot[];
-  physicalToLogicalKey: ReadonlyMap<string, string>;
-  sidebarProjectSortOrder: SidebarProjectSortOrder;
-}) {
-  const { sidebarProjects, physicalToLogicalKey, sidebarProjectSortOrder } = props;
-  const sidebarThreadSortSnapshots = useStore(
-    useMemo(() => createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector(), []),
-  );
-  const sortedProjectKeys = useMemo(() => {
-    if (sidebarProjectSortOrder === "manual") {
-      return sidebarProjects.map((project) => project.projectKey);
-    }
-
-    const sortableProjects = sidebarProjects.map((project) => ({
-      ...project,
-      id: project.projectKey,
-    }));
-    const sortableThreads = sidebarThreadSortSnapshots
-      .filter((thread) => thread.archivedAt === null)
-      .map((thread) => {
-        const physicalKey = scopedProjectKey(
-          scopeProjectRef(thread.environmentId, thread.projectId),
-        );
-        return {
-          id: thread.id,
-          environmentId: thread.environmentId,
-          projectId: (physicalToLogicalKey.get(physicalKey) ?? physicalKey) as ProjectId,
-          createdAt: thread.createdAt,
-          archivedAt: thread.archivedAt,
-          updatedAt: thread.updatedAt,
-          latestUserMessageAt: thread.latestUserMessageAt,
-        };
-      });
-    return sortProjectsForSidebar(sortableProjects, sortableThreads, sidebarProjectSortOrder).map(
-      (project) => project.id,
-    );
-  }, [sidebarProjectSortOrder, sidebarProjects, sidebarThreadSortSnapshots, physicalToLogicalKey]);
-
-  useEffect(() => {
-    const currentState = sidebarTransientStore.getState();
-    if (stringsEqual(currentState.sortedProjectKeys, sortedProjectKeys)) {
-      return;
-    }
-
-    sidebarTransientStore.setState({
-      sortedProjectKeys,
-    });
-  }, [sortedProjectKeys]);
-
-  return null;
-});
-
-const SidebarKeyboardController = memo(function SidebarKeyboardController(props: {
-  navigateToThread: (threadRef: ScopedThreadRef) => void;
-  sidebarThreadSortOrder: SidebarThreadSortOrder;
-}) {
-  const { navigateToThread, sidebarThreadSortOrder } = props;
-  const sortedProjectKeys = useSidebarProjectKeys();
-  const physicalToLogicalKey = useSidebarPhysicalToLogicalKey();
-  const expandedThreadListsByProject = useZustandStore(
-    sidebarTransientStore,
-    (state) => state.expandedThreadListsByProject,
-  );
-  const sidebarThreadSortSnapshots = useStore(
-    useMemo(() => createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector(), []),
-  );
-  const routeThreadRef = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteRef(params),
-  });
-  const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
-  const activeRouteProjectKey = useMemo(() => {
-    if (!routeThreadRef) {
-      return null;
-    }
-
-    const activeThread = sidebarThreadSortSnapshots.find(
-      (thread) =>
-        thread.environmentId === routeThreadRef.environmentId &&
-        thread.id === routeThreadRef.threadId,
-    );
-    if (!activeThread) {
-      return null;
-    }
-
-    const physicalKey = scopedProjectKey(
-      scopeProjectRef(activeThread.environmentId, activeThread.projectId),
-    );
-    return physicalToLogicalKey.get(physicalKey) ?? physicalKey;
-  }, [physicalToLogicalKey, routeThreadRef, sidebarThreadSortSnapshots]);
-  const keybindings = useServerKeybindings();
-  const platform = navigator.platform;
-  const threadJumpLabelByKey = useSidebarKeyboardController({
-    sortedProjectKeys,
-    sidebarThreadSortSnapshots,
-    physicalToLogicalKey,
-    expandedThreadListsByProject,
-    routeThreadRef,
-    routeThreadKey,
-    platform,
-    keybindings,
-    navigateToThread,
-    sidebarThreadSortOrder,
-  });
-
-  useEffect(() => {
-    const currentState = sidebarTransientStore.getState();
-    if (
-      currentState.activeRouteThreadKey === routeThreadKey &&
-      currentState.activeRouteProjectKey === activeRouteProjectKey &&
-      currentState.threadJumpLabelByKey === threadJumpLabelByKey
-    ) {
-      return;
-    }
-
-    sidebarTransientStore.setState({
-      activeRouteThreadKey: routeThreadKey,
-      activeRouteProjectKey,
-      threadJumpLabelByKey,
-    });
-  }, [activeRouteProjectKey, routeThreadKey, threadJumpLabelByKey]);
-
-  return null;
-});
-
 export default function Sidebar() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const activeEnvironmentId = useStore((store) => store.activeEnvironmentId);
@@ -2904,7 +2309,7 @@ export default function Sidebar() {
 
   const previousSidebarProjectSnapshotByKeyRef = useRef<
     ReadonlyMap<string, SidebarProjectSnapshot>
-  >(EMPTY_SIDEBAR_PROJECT_SNAPSHOT_BY_KEY);
+  >(new Map<string, SidebarProjectSnapshot>());
   const sidebarProjects = useMemo<SidebarProjectSnapshot[]>(() => {
     // Group projects by logical key while preserving insertion order from
     // orderedProjects.
@@ -2978,7 +2383,7 @@ export default function Sidebar() {
     }
     previousSidebarProjectSnapshotByKeyRef.current =
       nextSidebarProjectSnapshotByKey.size === 0
-        ? EMPTY_SIDEBAR_PROJECT_SNAPSHOT_BY_KEY
+        ? new Map<string, SidebarProjectSnapshot>()
         : nextSidebarProjectSnapshotByKey;
     return result;
   }, [
@@ -3207,15 +2612,7 @@ export default function Sidebar() {
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
 
   useEffect(() => {
-    const currentState = sidebarTransientStore.getState();
-    if (
-      currentState.projectSnapshotByKey === sidebarProjectByKey &&
-      currentState.physicalToLogicalKey === physicalToLogicalKey
-    ) {
-      return;
-    }
-
-    sidebarTransientStore.setState({
+    syncSidebarProjectMappings({
       projectSnapshotByKey: sidebarProjectByKey,
       physicalToLogicalKey,
     });

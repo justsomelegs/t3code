@@ -14,6 +14,7 @@ type SidebarProject = {
   updatedAt?: string | undefined;
 };
 type SidebarThreadSortInput = Pick<Thread, "createdAt" | "updatedAt"> & {
+  projectId: string;
   latestUserMessageAt?: string | null;
   messages?: Pick<Thread["messages"][number], "createdAt" | "role">[];
 };
@@ -44,15 +45,27 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
 
 type ThreadStatusInput = Pick<
   SidebarThreadSummary,
-  | "hasActionableProposedPlan"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "interactionMode"
-  | "latestTurn"
-  | "session"
+  "hasActionableProposedPlan" | "hasPendingApprovals" | "hasPendingUserInput" | "interactionMode"
 > & {
+  latestTurn: ThreadStatusLatestTurnSnapshot | null;
+  session: ThreadStatusSessionSnapshot | null;
   lastVisitedAt?: string | undefined;
 };
+
+type LatestTurnSnapshot = NonNullable<SidebarThreadSummary["latestTurn"]>;
+type SessionSnapshot = NonNullable<SidebarThreadSummary["session"]>;
+
+export interface ThreadStatusLatestTurnSnapshot {
+  turnId: LatestTurnSnapshot["turnId"];
+  startedAt: LatestTurnSnapshot["startedAt"];
+  completedAt: LatestTurnSnapshot["completedAt"];
+}
+
+export interface ThreadStatusSessionSnapshot {
+  orchestrationStatus: SessionSnapshot["orchestrationStatus"];
+  activeTurnId?: SessionSnapshot["activeTurnId"];
+  status: SessionSnapshot["status"];
+}
 
 export interface ThreadJumpHintVisibilityController {
   sync: (shouldShow: boolean) => void;
@@ -541,7 +554,7 @@ export function getProjectSortTimestamp(
 
 export function sortProjectsForSidebar<
   TProject extends SidebarProject,
-  TThread extends Pick<Thread, "projectId" | "createdAt" | "updatedAt"> & SidebarThreadSortInput,
+  TThread extends SidebarThreadSortInput,
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],

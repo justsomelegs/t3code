@@ -1,10 +1,20 @@
 import type { EnvironmentId, ProjectId, ScopedProjectRef, ThreadId } from "@t3tools/contracts";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
-import { sortThreadsForSidebar } from "../Sidebar.logic";
+import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import {
+  scopedProjectKey,
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime";
+import {
+  sortThreadsForSidebar,
+  type ThreadStatusLatestTurnSnapshot,
+  type ThreadStatusSessionSnapshot,
+} from "../Sidebar.logic";
 import type { AppState, EnvironmentState } from "../../store";
 import type { SidebarThreadSummary } from "../../types";
+import type { LogicalProjectKey } from "../../logicalProject";
 
 export interface SidebarThreadSortSnapshot {
   id: ThreadId;
@@ -30,8 +40,8 @@ export interface ProjectThreadStatusInput {
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   interactionMode: SidebarThreadSummary["interactionMode"];
-  latestTurn: SidebarThreadSummary["latestTurn"];
-  session: SidebarThreadSummary["session"];
+  latestTurn: ThreadStatusLatestTurnSnapshot | null;
+  session: ThreadStatusSessionSnapshot | null;
 }
 
 export interface SidebarThreadRowSnapshot {
@@ -47,7 +57,7 @@ interface ProjectThreadRenderEntry {
   threadKey: string;
   id: ThreadId;
   environmentId: EnvironmentId;
-  projectId: ProjectId;
+  projectId: LogicalProjectKey;
   createdAt: string;
   archivedAt: string | null;
   updatedAt?: string | undefined;
@@ -73,6 +83,7 @@ const EMPTY_PROJECT_RENDER_STATE: SidebarProjectRenderStateSnapshot = {
 function collectProjectThreadEntries(
   state: AppState,
   memberProjectRefs: readonly ScopedProjectRef[],
+  physicalToLogicalKey?: ReadonlyMap<string, LogicalProjectKey>,
 ): ProjectThreadRenderEntry[] {
   if (memberProjectRefs.length === 0) {
     return [];
@@ -94,7 +105,10 @@ function collectProjectThreadEntries(
         threadKey: scopedThreadKey(scopeThreadRef(summary.environmentId, summary.id)),
         id: summary.id,
         environmentId: summary.environmentId,
-        projectId: summary.projectId,
+        projectId:
+          physicalToLogicalKey?.get(
+            scopedProjectKey(scopeProjectRef(summary.environmentId, summary.projectId)),
+          ) ?? scopedProjectKey(scopeProjectRef(summary.environmentId, summary.projectId)),
         createdAt: summary.createdAt,
         archivedAt: summary.archivedAt,
         updatedAt: summary.updatedAt,
@@ -131,8 +145,20 @@ function collectProjectThreadStatusInputs(
         hasPendingApprovals: summary.hasPendingApprovals,
         hasPendingUserInput: summary.hasPendingUserInput,
         interactionMode: summary.interactionMode,
-        latestTurn: summary.latestTurn,
-        session: summary.session,
+        latestTurn: summary.latestTurn
+          ? {
+              turnId: summary.latestTurn.turnId,
+              startedAt: summary.latestTurn.startedAt,
+              completedAt: summary.latestTurn.completedAt,
+            }
+          : null,
+        session: summary.session
+          ? {
+              orchestrationStatus: summary.session.orchestrationStatus,
+              activeTurnId: summary.session.activeTurnId,
+              status: summary.session.status,
+            }
+          : null,
       });
     }
   }
@@ -151,6 +177,7 @@ function projectThreadStatusInputsEqual(
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.interactionMode === right.interactionMode &&
+    left.latestTurn?.turnId === right.latestTurn?.turnId &&
     left.latestTurn?.startedAt === right.latestTurn?.startedAt &&
     left.latestTurn?.completedAt === right.latestTurn?.completedAt &&
     left.session?.orchestrationStatus === right.session?.orchestrationStatus &&
@@ -159,16 +186,29 @@ function projectThreadStatusInputsEqual(
   );
 }
 
-export function createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector(): (
-  state: AppState,
-) => SidebarThreadSortSnapshot[] {
+function includeUpdatedSortFields(
+  sortOrder: SidebarProjectSortOrder | SidebarThreadSortOrder,
+): boolean {
+  return sortOrder === "updated_at";
+}
+
+export function createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector(
+  sortOrder: SidebarProjectSortOrder | SidebarThreadSortOrder,
+): (state: AppState) => SidebarThreadSortSnapshot[] {
   let previousResult = EMPTY_SIDEBAR_THREAD_SORT_SNAPSHOTS;
   let previousEntries = new Map<string, SidebarThreadSortSnapshot>();
 
   return (state) => {
+    if (sortOrder === "manual") {
+      previousEntries = new Map<string, SidebarThreadSortSnapshot>();
+      previousResult = EMPTY_SIDEBAR_THREAD_SORT_SNAPSHOTS;
+      return previousResult;
+    }
+
     const nextEntries = new Map<string, SidebarThreadSortSnapshot>();
     const nextResult: SidebarThreadSortSnapshot[] = [];
     let changed = false;
+    const watchUpdatedFields = includeUpdatedSortFields(sortOrder);
 
     for (const [environmentId, environmentState] of Object.entries(
       state.environmentStateById,
@@ -188,8 +228,9 @@ export function createSidebarThreadSortSnapshotsAcrossEnvironmentsSelector(): (
           previousEntry.projectId === summary.projectId &&
           previousEntry.createdAt === summary.createdAt &&
           previousEntry.archivedAt === summary.archivedAt &&
-          previousEntry.updatedAt === summary.updatedAt &&
-          previousEntry.latestUserMessageAt === summary.latestUserMessageAt
+          (!watchUpdatedFields ||
+            (previousEntry.updatedAt === summary.updatedAt &&
+              previousEntry.latestUserMessageAt === summary.latestUserMessageAt))
         ) {
           nextEntries.set(entryKey, previousEntry);
           nextResult.push(previousEntry);
@@ -310,6 +351,7 @@ export function createSidebarProjectRenderStateSelector(input: {
   activeRouteThreadKey: string | null;
   isThreadListExpanded: boolean;
   memberProjectRefs: readonly ScopedProjectRef[];
+  physicalToLogicalKey?: ReadonlyMap<string, LogicalProjectKey>;
   projectExpanded: boolean;
   previewLimit: number;
   threadSortOrder: SidebarThreadSortOrder;
@@ -318,9 +360,11 @@ export function createSidebarProjectRenderStateSelector(input: {
 
   return (state) => {
     const visibleProjectThreads = sortThreadsForSidebar(
-      collectProjectThreadEntries(state, input.memberProjectRefs).filter(
-        (thread) => thread.archivedAt === null,
-      ),
+      collectProjectThreadEntries(
+        state,
+        input.memberProjectRefs,
+        input.physicalToLogicalKey,
+      ).filter((thread) => thread.archivedAt === null),
       input.threadSortOrder,
     );
     const pinnedCollapsedThread =
