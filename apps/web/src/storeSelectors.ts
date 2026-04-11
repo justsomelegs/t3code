@@ -980,21 +980,26 @@ export function createThreadTimelineSliceSelectorByRef(
     const latestTurn = environmentState.threadTurnStateById[ref.threadId]?.latestTurn ?? null;
     const activeAssistantMessageId = latestTurn?.assistantMessageId ?? null;
     const activeTurnId = latestTurn?.turnId ?? undefined;
+    const activeAssistantMessageIndex =
+      activeAssistantMessageId === null
+        ? -1
+        : messages.findIndex((message) => message.id === activeAssistantMessageId);
+    const activeAssistantMessageIsTail =
+      activeAssistantMessageIndex >= 0 && activeAssistantMessageIndex === messages.length - 1;
+    const shouldKeepActiveTurnContentLive = activeAssistantMessageIsTail;
 
-    const historicalMessages =
-      activeAssistantMessageId === null
-        ? messages
-        : messages.filter((message) => message.id !== activeAssistantMessageId);
-    const liveMessages =
-      activeAssistantMessageId === null
-        ? EMPTY_MESSAGES
-        : messages.filter((message) => message.id === activeAssistantMessageId);
+    const historicalMessages = !shouldKeepActiveTurnContentLive
+      ? messages
+      : messages.filter((message) => message.id !== activeAssistantMessageId);
+    const liveMessages = !shouldKeepActiveTurnContentLive
+      ? EMPTY_MESSAGES
+      : messages.filter((message) => message.id === activeAssistantMessageId);
     const historicalProposedPlans =
-      activeTurnId === undefined
+      activeTurnId === undefined || !shouldKeepActiveTurnContentLive
         ? proposedPlans
         : proposedPlans.filter((plan) => plan.turnId !== activeTurnId);
     const liveProposedPlans =
-      activeTurnId === undefined
+      activeTurnId === undefined || !shouldKeepActiveTurnContentLive
         ? EMPTY_PROPOSED_PLANS
         : proposedPlans.filter((plan) => plan.turnId === activeTurnId);
     const activeWorkEntries = deriveWorkLogEntries(activities, activeTurnId);

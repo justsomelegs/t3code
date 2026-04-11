@@ -210,14 +210,18 @@ export const MessagesTimelineContainer = memo(function MessagesTimelineContainer
       : EMPTY_CHAT_MESSAGES;
     const messagesWithPreviewHandoff = applyPreviewHandoff(baseMessages);
     const canPromoteSettledLiveMessages =
-      phase === "connecting" &&
-      activeWorkEntries.length === 0 &&
+      optimisticUserMessages.length > 0 &&
       messagesWithPreviewHandoff.length > 0 &&
       messagesWithPreviewHandoff.every(
         (message) => message.role === "assistant" && !message.streaming,
       );
     return canPromoteSettledLiveMessages ? messagesWithPreviewHandoff : EMPTY_CHAT_MESSAGES;
-  }, [activeWorkEntries, applyPreviewHandoff, phase, serverTimelineSlices.liveMessages, threadRef]);
+  }, [
+    applyPreviewHandoff,
+    optimisticUserMessages.length,
+    serverTimelineSlices.liveMessages,
+    threadRef,
+  ]);
   const liveTimelineMessages = useMemo(() => {
     const baseMessages = threadRef
       ? (serverTimelineSlices.liveMessages ?? EMPTY_CHAT_MESSAGES)
@@ -241,23 +245,11 @@ export const MessagesTimelineContainer = memo(function MessagesTimelineContainer
     if (pendingMessages.length === 0) {
       return messagesWithPreviewHandoff;
     }
-    const liveSectionContainsSettledPreviousTurnContent =
-      activeWorkEntries.length === 0 &&
-      messagesWithPreviewHandoff.length > 0 &&
-      messagesWithPreviewHandoff.every(
-        (message) => message.role === "assistant" && !message.streaming,
-      );
-    const shouldAppendOptimisticUserMessagesAfterSettledLiveMessages =
-      phase === "connecting" || liveSectionContainsSettledPreviousTurnContent;
-    return shouldAppendOptimisticUserMessagesAfterSettledLiveMessages
-      ? [...messagesWithPreviewHandoff, ...pendingMessages]
-      : [...pendingMessages, ...messagesWithPreviewHandoff];
+    return [...pendingMessages, ...messagesWithPreviewHandoff];
   }, [
-    activeWorkEntries,
     applyPreviewHandoff,
     historicalTimelineMessages,
     optimisticUserMessages,
-    phase,
     settledLiveMessages,
     serverTimelineSlices.liveMessages,
     threadRef,
