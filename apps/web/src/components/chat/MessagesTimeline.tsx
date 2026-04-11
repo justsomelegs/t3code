@@ -406,7 +406,7 @@ interface TimelineRowItemProps {
   changedFilesExpanded: boolean;
   canRevertAgentWork: boolean;
   activeTurnInProgress: boolean;
-  activeTurnId?: TurnId | null;
+  activeTurnId: TurnId | null | undefined;
   isWorking: boolean;
   isRevertingCheckpoint: boolean;
   activeThreadEnvironmentId: EnvironmentId;
@@ -629,7 +629,7 @@ const AssistantMessageRow = memo(function AssistantMessageRow(props: {
   turnDiffSummary: TurnDiffSummary | null;
   changedFilesExpanded: boolean;
   activeTurnInProgress: boolean;
-  activeTurnId?: TurnId | null;
+  activeTurnId: TurnId | null | undefined;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
