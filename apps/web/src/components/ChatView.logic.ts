@@ -226,12 +226,26 @@ export function threadHasStarted(thread: Thread | null | undefined): boolean {
   );
 }
 
+type ThreadStartSnapshot = {
+  latestTurn: Thread["latestTurn"] | null;
+  session: Thread["session"] | null;
+  messageCount?: number;
+  messages?: { length: number } | null;
+};
+
+export function threadSnapshotHasStarted(thread: ThreadStartSnapshot | null | undefined): boolean {
+  const messageCount = thread?.messageCount ?? thread?.messages?.length ?? 0;
+  return Boolean(
+    thread && (thread.latestTurn !== null || messageCount > 0 || thread.session !== null),
+  );
+}
+
 export function deriveLockedProvider(input: {
-  thread: Thread | null | undefined;
+  thread: ThreadStartSnapshot | null | undefined;
   selectedProvider: ProviderKind | null;
   threadProvider: ProviderKind | null;
 }): ProviderKind | null {
-  if (!threadHasStarted(input.thread)) {
+  if (!threadSnapshotHasStarted(input.thread)) {
     return null;
   }
   return input.thread?.session?.provider ?? input.threadProvider ?? input.selectedProvider ?? null;
@@ -293,7 +307,7 @@ export interface LocalDispatchSnapshot {
 }
 
 export function createLocalDispatchSnapshot(
-  activeThread: Thread | undefined,
+  activeThread: Thread | Pick<Thread, "latestTurn" | "session"> | undefined,
   options?: { preparingWorktree?: boolean },
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;

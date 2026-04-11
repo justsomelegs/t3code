@@ -99,9 +99,9 @@ import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
-import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
+import { type ContextWindowSnapshot } from "../../lib/contextWindow";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
@@ -256,7 +256,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
-  activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
+  activeContextWindow: ContextWindowSnapshot | null;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -348,7 +348,6 @@ export interface ChatComposerProps {
   // Thread context
   activeThreadId: ThreadId | null;
   activeThreadEnvironmentId: EnvironmentId | undefined;
-  activeThread: Thread | undefined;
   isServerThread: boolean;
   isLocalDraftThread: boolean;
 
@@ -393,7 +392,7 @@ export interface ChatComposerProps {
   activeThreadModelSelection: ModelSelection | null | undefined;
 
   // Context window
-  activeThreadActivities: Thread["activities"] | undefined;
+  activeContextWindow: ContextWindowSnapshot | null;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -454,7 +453,6 @@ export const ChatComposer = memo(
       draftId,
       activeThreadId,
       activeThreadEnvironmentId: _activeThreadEnvironmentId,
-      activeThread,
       isServerThread: _isServerThread,
       isLocalDraftThread: _isLocalDraftThread,
       phase,
@@ -481,7 +479,7 @@ export const ChatComposer = memo(
       providerStatuses,
       activeProjectDefaultModelSelection,
       activeThreadModelSelection,
-      activeThreadActivities,
+      activeContextWindow,
       resolvedTheme,
       settings,
       gitCwd,
@@ -627,11 +625,6 @@ export const ChatComposer = memo(
     // ------------------------------------------------------------------
     // Context window
     // ------------------------------------------------------------------
-    const activeContextWindow = useMemo(
-      () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
-      [activeThreadActivities],
-    );
-
     // ------------------------------------------------------------------
     // Composer-local state
     // ------------------------------------------------------------------
@@ -1639,7 +1632,7 @@ export const ChatComposer = memo(
           );
         },
         addTerminalContext: (selection: TerminalContextSelection) => {
-          if (!activeThread) return;
+          if (!activeThreadId) return;
           const snapshot = composerEditorRef.current?.readSnapshot() ?? {
             value: promptRef.current,
             cursor: composerCursor,
@@ -1659,7 +1652,7 @@ export const ChatComposer = memo(
             insertion.prompt,
             {
               id: randomUUID(),
-              threadId: activeThread.id,
+              threadId: activeThreadId,
               createdAt: new Date().toISOString(),
               ...selection,
             },
@@ -1686,7 +1679,7 @@ export const ChatComposer = memo(
         }),
       }),
       [
-        activeThread,
+        activeThreadId,
         composerDraftTarget,
         composerCursor,
         composerTerminalContexts,
@@ -1987,4 +1980,166 @@ export const ChatComposer = memo(
       </form>
     );
   }),
+  areChatComposerPropsEqual,
 );
+
+function areChatComposerPropsEqual(
+  previous: Readonly<ChatComposerProps>,
+  next: Readonly<ChatComposerProps>,
+): boolean {
+  return (
+    previous.composerDraftTarget === next.composerDraftTarget &&
+    previous.environmentId === next.environmentId &&
+    previous.routeKind === next.routeKind &&
+    previous.routeThreadRef === next.routeThreadRef &&
+    previous.draftId === next.draftId &&
+    previous.activeThreadId === next.activeThreadId &&
+    previous.activeThreadEnvironmentId === next.activeThreadEnvironmentId &&
+    previous.isServerThread === next.isServerThread &&
+    previous.isLocalDraftThread === next.isLocalDraftThread &&
+    previous.phase === next.phase &&
+    previous.isConnecting === next.isConnecting &&
+    previous.isSendBusy === next.isSendBusy &&
+    previous.isPreparingWorktree === next.isPreparingWorktree &&
+    previous.activePendingApproval?.requestId === next.activePendingApproval?.requestId &&
+    pendingApprovalsEqual(previous.pendingApprovals, next.pendingApprovals) &&
+    pendingUserInputsEqual(previous.pendingUserInputs, next.pendingUserInputs) &&
+    pendingProgressEqual(previous.activePendingProgress, next.activePendingProgress) &&
+    previous.activePendingResolvedAnswers === next.activePendingResolvedAnswers &&
+    previous.activePendingIsResponding === next.activePendingIsResponding &&
+    previous.activePendingDraftAnswers === next.activePendingDraftAnswers &&
+    previous.activePendingQuestionIndex === next.activePendingQuestionIndex &&
+    approvalRequestIdsEqual(previous.respondingRequestIds, next.respondingRequestIds) &&
+    previous.showPlanFollowUpPrompt === next.showPlanFollowUpPrompt &&
+    proposedPlanIdentity(previous.activeProposedPlan) ===
+      proposedPlanIdentity(next.activeProposedPlan) &&
+    previous.activePlan?.turnId === next.activePlan?.turnId &&
+    previous.sidebarProposedPlan?.turnId === next.sidebarProposedPlan?.turnId &&
+    previous.planSidebarOpen === next.planSidebarOpen &&
+    previous.runtimeMode === next.runtimeMode &&
+    previous.interactionMode === next.interactionMode &&
+    previous.lockedProvider === next.lockedProvider &&
+    previous.providerStatuses === next.providerStatuses &&
+    previous.activeProjectDefaultModelSelection === next.activeProjectDefaultModelSelection &&
+    previous.activeThreadModelSelection === next.activeThreadModelSelection &&
+    contextWindowSnapshotsEqual(previous.activeContextWindow, next.activeContextWindow) &&
+    previous.resolvedTheme === next.resolvedTheme &&
+    previous.settings === next.settings &&
+    previous.gitCwd === next.gitCwd &&
+    previous.promptRef === next.promptRef &&
+    previous.composerImagesRef === next.composerImagesRef &&
+    previous.composerTerminalContextsRef === next.composerTerminalContextsRef &&
+    previous.shouldAutoScrollRef === next.shouldAutoScrollRef &&
+    previous.scheduleStickToBottom === next.scheduleStickToBottom &&
+    previous.onSend === next.onSend &&
+    previous.onInterrupt === next.onInterrupt &&
+    previous.onImplementPlanInNewThread === next.onImplementPlanInNewThread &&
+    previous.onRespondToApproval === next.onRespondToApproval &&
+    previous.onSelectActivePendingUserInputOption === next.onSelectActivePendingUserInputOption &&
+    previous.onAdvanceActivePendingUserInput === next.onAdvanceActivePendingUserInput &&
+    previous.onPreviousActivePendingUserInputQuestion ===
+      next.onPreviousActivePendingUserInputQuestion &&
+    previous.onChangeActivePendingUserInputCustomAnswer ===
+      next.onChangeActivePendingUserInputCustomAnswer &&
+    previous.onProviderModelSelect === next.onProviderModelSelect &&
+    previous.toggleInteractionMode === next.toggleInteractionMode &&
+    previous.handleRuntimeModeChange === next.handleRuntimeModeChange &&
+    previous.handleInteractionModeChange === next.handleInteractionModeChange &&
+    previous.togglePlanSidebar === next.togglePlanSidebar &&
+    previous.focusComposer === next.focusComposer &&
+    previous.scheduleComposerFocus === next.scheduleComposerFocus &&
+    previous.setThreadError === next.setThreadError &&
+    previous.onExpandImage === next.onExpandImage
+  );
+}
+
+function approvalRequestIdsEqual(
+  previous: ReadonlyArray<ApprovalRequestId>,
+  next: ReadonlyArray<ApprovalRequestId>,
+): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every((requestId, index) => requestId === next[index])
+  );
+}
+
+function pendingApprovalsEqual(
+  previous: ReadonlyArray<PendingApproval>,
+  next: ReadonlyArray<PendingApproval>,
+): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every(
+      (approval, index) =>
+        approval.requestId === next[index]?.requestId &&
+        approval.requestKind === next[index]?.requestKind &&
+        approval.createdAt === next[index]?.createdAt &&
+        approval.detail === next[index]?.detail,
+    )
+  );
+}
+
+function pendingUserInputsEqual(
+  previous: ReadonlyArray<PendingUserInput>,
+  next: ReadonlyArray<PendingUserInput>,
+): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every(
+      (pendingInput, index) =>
+        pendingInput.requestId === next[index]?.requestId &&
+        pendingInput.createdAt === next[index]?.createdAt &&
+        pendingInput.questions === next[index]?.questions,
+    )
+  );
+}
+
+function pendingProgressEqual(
+  previous: ChatComposerProps["activePendingProgress"],
+  next: ChatComposerProps["activePendingProgress"],
+): boolean {
+  return (
+    previous?.questionIndex === next?.questionIndex &&
+    previous?.isLastQuestion === next?.isLastQuestion &&
+    previous?.canAdvance === next?.canAdvance &&
+    previous?.customAnswer === next?.customAnswer &&
+    previous?.activeQuestion?.id === next?.activeQuestion?.id
+  );
+}
+
+function proposedPlanIdentity(plan: ChatComposerProps["activeProposedPlan"]): string | null {
+  return plan ? `${plan.id}:${plan.updatedAt}:${plan.implementedAt ?? ""}` : null;
+}
+
+function contextWindowSnapshotsEqual(
+  previous: ContextWindowSnapshot | null,
+  next: ContextWindowSnapshot | null,
+): boolean {
+  if (previous === next) {
+    return true;
+  }
+  if (!previous || !next) {
+    return previous === next;
+  }
+  return (
+    previous.usedTokens === next.usedTokens &&
+    previous.totalProcessedTokens === next.totalProcessedTokens &&
+    previous.maxTokens === next.maxTokens &&
+    previous.remainingTokens === next.remainingTokens &&
+    previous.usedPercentage === next.usedPercentage &&
+    previous.remainingPercentage === next.remainingPercentage &&
+    previous.inputTokens === next.inputTokens &&
+    previous.cachedInputTokens === next.cachedInputTokens &&
+    previous.outputTokens === next.outputTokens &&
+    previous.reasoningOutputTokens === next.reasoningOutputTokens &&
+    previous.lastUsedTokens === next.lastUsedTokens &&
+    previous.lastInputTokens === next.lastInputTokens &&
+    previous.lastCachedInputTokens === next.lastCachedInputTokens &&
+    previous.lastOutputTokens === next.lastOutputTokens &&
+    previous.lastReasoningOutputTokens === next.lastReasoningOutputTokens &&
+    previous.toolUses === next.toolUses &&
+    previous.durationMs === next.durationMs &&
+    previous.compactsAutomatically === next.compactsAutomatically &&
+    previous.updatedAt === next.updatedAt
+  );
+}

@@ -19,6 +19,7 @@ import {
   RuntimeMode,
   TerminalOpenInput,
 } from "@t3tools/contracts";
+import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import {
   parseScopedThreadKey,
   scopedThreadKey,
@@ -28,7 +29,16 @@ import {
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useGitStatus } from "~/lib/gitStatusState";
@@ -48,9 +58,7 @@ import {
   deriveActivePlanState,
   findSidebarProposedPlan,
   findLatestProposedPlan,
-  deriveWorkLogEntries,
   hasActionableProposedPlan,
-  hasToolActivityForTurn,
   isLatestTurnSettled,
 } from "../session-logic";
 import { isScrollContainerNearBottom } from "../chat-scroll";
@@ -66,7 +74,16 @@ import {
   selectThreadsAcrossEnvironments,
   useStore,
 } from "../store";
-import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
+import {
+  createProjectSelectorByRef,
+  createThreadActivitiesSelectorByRef,
+  createThreadMessageIdsSelectorByRef,
+  createThreadPendingSnapshotSelectorByRef,
+  createThreadProposedPlansSelectorByRef,
+  createThreadRuntimeSnapshotSelectorByRef,
+  createThreadSelectorByRef,
+  createThreadStaticShellSelectorByRef,
+} from "../storeSelectors";
 import { useUiStateStore } from "../uiStateStore";
 import {
   buildPlanImplementationThreadTitle,
@@ -120,6 +137,7 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
+import { deriveLatestContextWindowSnapshot } from "../lib/contextWindow";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
@@ -166,7 +184,6 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
-const EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID: Record<string, boolean> = {};
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 
 type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
@@ -325,7 +342,7 @@ interface TerminalLaunchContext {
 type PersistentTerminalLaunchContext = Pick<TerminalLaunchContext, "cwd" | "worktreePath">;
 
 function useLocalDispatchState(input: {
-  activeThread: Thread | undefined;
+  activeThread: Pick<Thread, "latestTurn" | "session"> | undefined;
   activeLatestTurn: Thread["latestTurn"] | null;
   phase: SessionPhase;
   activePendingApproval: ApprovalRequestId | null;
@@ -564,6 +581,530 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   );
 });
 
+interface ChatComposerContainerProps {
+  composerRef: React.RefObject<ChatComposerHandle | null>;
+  composerDraftTarget: ScopedThreadRef | DraftId;
+  environmentId: EnvironmentId;
+  routeKind: "server" | "draft";
+  routeThreadRef: ScopedThreadRef;
+  draftId: DraftId | null;
+  draftThreadView: Thread | undefined;
+  activeThreadId: ThreadId | null;
+  activeThreadEnvironmentId: EnvironmentId | undefined;
+  isServerThread: boolean;
+  isLocalDraftThread: boolean;
+  isConnecting: boolean;
+  isSendBusy: boolean;
+  isPreparingWorktree: boolean;
+  respondingRequestIds: ApprovalRequestId[];
+  respondingUserInputRequestIds: ApprovalRequestId[];
+  pendingUserInputAnswersByRequestId: Record<string, Record<string, PendingUserInputDraftAnswer>>;
+  pendingUserInputQuestionIndexByRequestId: Record<string, number>;
+  planSidebarOpen: boolean;
+  runtimeMode: RuntimeMode;
+  interactionMode: ProviderInteractionMode;
+  lockedProvider: ProviderKind | null;
+  providerStatuses: ServerProvider[];
+  activeProjectDefaultModelSelection: ModelSelection | null | undefined;
+  resolvedTheme: "light" | "dark";
+  settings: UnifiedSettings;
+  gitCwd: string | null;
+  promptRef: React.MutableRefObject<string>;
+  composerImagesRef: React.MutableRefObject<ComposerImageAttachment[]>;
+  composerTerminalContextsRef: React.MutableRefObject<TerminalContextDraft[]>;
+  shouldAutoScrollRef: React.MutableRefObject<boolean>;
+  scheduleStickToBottom: () => void;
+  onSend: (e?: { preventDefault: () => void }) => void;
+  onInterrupt: () => void;
+  onImplementPlanInNewThread: () => void;
+  onRespondToApproval: (
+    requestId: ApprovalRequestId,
+    decision: ProviderApprovalDecision,
+  ) => Promise<void>;
+  onRespondToUserInput: (
+    requestId: ApprovalRequestId,
+    answers: Record<string, unknown>,
+  ) => Promise<void>;
+  onProviderModelSelect: (provider: ProviderKind, model: string) => void;
+  toggleInteractionMode: () => void;
+  handleRuntimeModeChange: (nextRuntimeMode: RuntimeMode) => void;
+  handleInteractionModeChange: (nextInteractionMode: ProviderInteractionMode) => void;
+  togglePlanSidebar: () => void;
+  focusComposer: () => void;
+  scheduleComposerFocus: () => void;
+  setThreadError: (targetThreadId: ThreadId | null, error: string | null) => void;
+  onExpandImage: (preview: ExpandedImagePreview) => void;
+  setPendingUserInputQuestionIndexByRequestId: React.Dispatch<
+    React.SetStateAction<Record<string, number>>
+  >;
+  setPendingUserInputAnswersByRequestId: React.Dispatch<
+    React.SetStateAction<Record<string, Record<string, PendingUserInputDraftAnswer>>>
+  >;
+}
+
+const ChatComposerContainer = memo(function ChatComposerContainer(
+  props: ChatComposerContainerProps,
+) {
+  const {
+    composerRef,
+    composerDraftTarget,
+    environmentId,
+    routeKind,
+    routeThreadRef,
+    draftId,
+    draftThreadView,
+    activeThreadId,
+    activeThreadEnvironmentId,
+    isServerThread,
+    isLocalDraftThread,
+    isConnecting,
+    isSendBusy,
+    isPreparingWorktree,
+    respondingRequestIds,
+    respondingUserInputRequestIds,
+    pendingUserInputAnswersByRequestId,
+    pendingUserInputQuestionIndexByRequestId,
+    planSidebarOpen,
+    runtimeMode,
+    interactionMode,
+    lockedProvider,
+    providerStatuses,
+    activeProjectDefaultModelSelection,
+    resolvedTheme,
+    settings,
+    gitCwd,
+    promptRef,
+    composerImagesRef,
+    composerTerminalContextsRef,
+    shouldAutoScrollRef,
+    scheduleStickToBottom,
+    onSend,
+    onInterrupt,
+    onImplementPlanInNewThread,
+    onRespondToApproval,
+    onRespondToUserInput,
+    onProviderModelSelect,
+    toggleInteractionMode,
+    handleRuntimeModeChange,
+    handleInteractionModeChange,
+    togglePlanSidebar,
+    focusComposer,
+    scheduleComposerFocus,
+    setThreadError,
+    onExpandImage,
+    setPendingUserInputQuestionIndexByRequestId,
+    setPendingUserInputAnswersByRequestId,
+  } = props;
+  const serverThreadView = useStore(
+    useMemo(
+      () => createThreadStaticShellSelectorByRef(routeKind === "server" ? routeThreadRef : null),
+      [routeKind, routeThreadRef],
+    ),
+  );
+  const serverThreadRuntime = useStore(
+    useMemo(
+      () =>
+        createThreadRuntimeSnapshotSelectorByRef(routeKind === "server" ? routeThreadRef : null),
+      [routeKind, routeThreadRef],
+    ),
+  );
+  const serverThreadActivities = useStore(
+    useMemo(
+      () => createThreadActivitiesSelectorByRef(routeKind === "server" ? routeThreadRef : null),
+      [routeKind, routeThreadRef],
+    ),
+  );
+  const serverThreadProposedPlans = useStore(
+    useMemo(
+      () => createThreadProposedPlansSelectorByRef(routeKind === "server" ? routeThreadRef : null),
+      [routeKind, routeThreadRef],
+    ),
+  );
+  const conversationThread = routeKind === "server" ? serverThreadView : draftThreadView;
+  const threadActivities =
+    routeKind === "server"
+      ? serverThreadActivities
+      : (draftThreadView?.activities ?? EMPTY_ACTIVITIES);
+  const threadProposedPlans =
+    routeKind === "server"
+      ? serverThreadProposedPlans
+      : (draftThreadView?.proposedPlans ?? EMPTY_PROPOSED_PLANS);
+  const activeThreadSession =
+    routeKind === "server"
+      ? (serverThreadRuntime?.session ?? null)
+      : (draftThreadView?.session ?? null);
+  const activeLatestTurn =
+    routeKind === "server"
+      ? (serverThreadRuntime?.latestTurn ?? null)
+      : (draftThreadView?.latestTurn ?? null);
+  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThreadSession);
+  const threadPlanCatalog = useThreadPlanCatalog(
+    useMemo(() => {
+      const threadIds: ThreadId[] = [];
+      if (conversationThread?.id) {
+        threadIds.push(conversationThread.id);
+      }
+      const sourceThreadId = activeLatestTurn?.sourceProposedPlan?.threadId;
+      if (sourceThreadId && sourceThreadId !== conversationThread?.id) {
+        threadIds.push(sourceThreadId);
+      }
+      return threadIds;
+    }, [activeLatestTurn?.sourceProposedPlan?.threadId, conversationThread?.id]),
+  );
+  const phase =
+    routeKind === "server"
+      ? (serverThreadRuntime?.phase ?? derivePhase(null))
+      : derivePhase(draftThreadView?.session ?? null);
+  const pendingApprovals = useMemo(
+    () => derivePendingApprovals(threadActivities),
+    [threadActivities],
+  );
+  const pendingUserInputs = useMemo(
+    () => derivePendingUserInputs(threadActivities),
+    [threadActivities],
+  );
+  const activePendingUserInput = pendingUserInputs[0] ?? null;
+  const activePendingDraftAnswers = useMemo(
+    () =>
+      activePendingUserInput
+        ? (pendingUserInputAnswersByRequestId[activePendingUserInput.requestId] ??
+          EMPTY_PENDING_USER_INPUT_ANSWERS)
+        : EMPTY_PENDING_USER_INPUT_ANSWERS,
+    [activePendingUserInput, pendingUserInputAnswersByRequestId],
+  );
+  const activePendingQuestionIndex = activePendingUserInput
+    ? (pendingUserInputQuestionIndexByRequestId[activePendingUserInput.requestId] ?? 0)
+    : 0;
+  const activePendingProgress = useMemo(
+    () =>
+      activePendingUserInput
+        ? derivePendingUserInputProgress(
+            activePendingUserInput.questions,
+            activePendingDraftAnswers,
+            activePendingQuestionIndex,
+          )
+        : null,
+    [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
+  );
+  const activePendingResolvedAnswers = useMemo(
+    () =>
+      activePendingUserInput
+        ? buildPendingUserInputAnswers(activePendingUserInput.questions, activePendingDraftAnswers)
+        : null,
+    [activePendingDraftAnswers, activePendingUserInput],
+  );
+  const activeProposedPlan = useMemo(() => {
+    if (!latestTurnSettled) {
+      return null;
+    }
+    return findLatestProposedPlan(threadProposedPlans, activeLatestTurn?.turnId ?? null);
+  }, [activeLatestTurn?.turnId, latestTurnSettled, threadProposedPlans]);
+  const sidebarProposedPlan = useMemo(
+    () =>
+      findSidebarProposedPlan({
+        threads: threadPlanCatalog,
+        latestTurn: activeLatestTurn,
+        latestTurnSettled,
+        threadId: conversationThread?.id ?? null,
+      }),
+    [activeLatestTurn, conversationThread?.id, latestTurnSettled, threadPlanCatalog],
+  );
+  const activePlan = useMemo(
+    () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, threadActivities],
+  );
+  const showPlanFollowUpPrompt =
+    pendingUserInputs.length === 0 &&
+    interactionMode === "plan" &&
+    latestTurnSettled &&
+    hasActionableProposedPlan(activeProposedPlan);
+  const activePendingApproval = pendingApprovals[0] ?? null;
+  const activeContextWindow = useMemo(
+    () => deriveLatestContextWindowSnapshot(threadActivities),
+    [threadActivities],
+  );
+
+  const setActivePendingUserInputQuestionIndex = useCallback(
+    (nextQuestionIndex: number) => {
+      if (!activePendingUserInput) {
+        return;
+      }
+      setPendingUserInputQuestionIndexByRequestId((existing) => ({
+        ...existing,
+        [activePendingUserInput.requestId]: nextQuestionIndex,
+      }));
+    },
+    [activePendingUserInput, setPendingUserInputQuestionIndexByRequestId],
+  );
+
+  const onSelectActivePendingUserInputOption = useCallback(
+    (questionId: string, optionLabel: string) => {
+      if (!activePendingUserInput) {
+        return;
+      }
+      setPendingUserInputAnswersByRequestId((existing) => {
+        const question =
+          (activePendingProgress?.activeQuestion?.id === questionId
+            ? activePendingProgress.activeQuestion
+            : undefined) ??
+          activePendingUserInput.questions.find((entry) => entry.id === questionId);
+        if (!question) {
+          return existing;
+        }
+
+        return {
+          ...existing,
+          [activePendingUserInput.requestId]: {
+            ...existing[activePendingUserInput.requestId],
+            [questionId]: togglePendingUserInputOptionSelection(
+              question,
+              existing[activePendingUserInput.requestId]?.[questionId],
+              optionLabel,
+            ),
+          },
+        };
+      });
+      promptRef.current = "";
+      composerRef.current?.resetCursorState({ cursor: 0 });
+    },
+    [
+      activePendingProgress?.activeQuestion,
+      activePendingUserInput,
+      composerRef,
+      promptRef,
+      setPendingUserInputAnswersByRequestId,
+    ],
+  );
+
+  const onChangeActivePendingUserInputCustomAnswer = useCallback(
+    (
+      questionId: string,
+      value: string,
+      nextCursor: number,
+      expandedCursor: number,
+      _cursorAdjacentToMention: boolean,
+    ) => {
+      if (!activePendingUserInput) {
+        return;
+      }
+      promptRef.current = value;
+      setPendingUserInputAnswersByRequestId((existing) => ({
+        ...existing,
+        [activePendingUserInput.requestId]: {
+          ...existing[activePendingUserInput.requestId],
+          [questionId]: setPendingUserInputCustomAnswer(
+            existing[activePendingUserInput.requestId]?.[questionId],
+            value,
+          ),
+        },
+      }));
+      const snapshot = composerRef.current?.readSnapshot();
+      if (
+        snapshot?.value !== value ||
+        snapshot.cursor !== nextCursor ||
+        snapshot.expandedCursor !== expandedCursor
+      ) {
+        composerRef.current?.focusAt(nextCursor);
+      }
+    },
+    [activePendingUserInput, composerRef, promptRef, setPendingUserInputAnswersByRequestId],
+  );
+
+  const onAdvanceActivePendingUserInput = useCallback(() => {
+    if (!activePendingUserInput || !activePendingProgress) {
+      return;
+    }
+    if (activePendingProgress.isLastQuestion) {
+      if (activePendingResolvedAnswers) {
+        void onRespondToUserInput(activePendingUserInput.requestId, activePendingResolvedAnswers);
+      }
+      return;
+    }
+    setActivePendingUserInputQuestionIndex(activePendingProgress.questionIndex + 1);
+  }, [
+    activePendingProgress,
+    activePendingResolvedAnswers,
+    activePendingUserInput,
+    onRespondToUserInput,
+    setActivePendingUserInputQuestionIndex,
+  ]);
+
+  const onPreviousActivePendingUserInputQuestion = useCallback(() => {
+    if (!activePendingProgress) {
+      return;
+    }
+    setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
+  }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
+
+  return (
+    <ChatComposer
+      ref={composerRef}
+      composerDraftTarget={composerDraftTarget}
+      environmentId={environmentId}
+      routeKind={routeKind}
+      routeThreadRef={routeThreadRef}
+      draftId={draftId}
+      activeThreadId={activeThreadId}
+      activeThreadEnvironmentId={activeThreadEnvironmentId}
+      isServerThread={isServerThread}
+      isLocalDraftThread={isLocalDraftThread}
+      phase={phase}
+      isConnecting={isConnecting}
+      isSendBusy={isSendBusy}
+      isPreparingWorktree={isPreparingWorktree}
+      activePendingApproval={activePendingApproval}
+      pendingApprovals={pendingApprovals}
+      pendingUserInputs={pendingUserInputs}
+      activePendingProgress={activePendingProgress}
+      activePendingResolvedAnswers={activePendingResolvedAnswers}
+      activePendingIsResponding={
+        activePendingUserInput
+          ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
+          : false
+      }
+      activePendingDraftAnswers={activePendingDraftAnswers}
+      activePendingQuestionIndex={activePendingQuestionIndex}
+      respondingRequestIds={respondingRequestIds}
+      showPlanFollowUpPrompt={showPlanFollowUpPrompt}
+      activeProposedPlan={activeProposedPlan}
+      activePlan={activePlan as { turnId?: TurnId } | null}
+      sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
+      planSidebarOpen={planSidebarOpen}
+      runtimeMode={runtimeMode}
+      interactionMode={interactionMode}
+      lockedProvider={lockedProvider}
+      providerStatuses={providerStatuses}
+      activeProjectDefaultModelSelection={activeProjectDefaultModelSelection}
+      activeThreadModelSelection={conversationThread?.modelSelection}
+      activeContextWindow={activeContextWindow}
+      resolvedTheme={resolvedTheme}
+      settings={settings}
+      gitCwd={gitCwd}
+      promptRef={promptRef}
+      composerImagesRef={composerImagesRef}
+      composerTerminalContextsRef={composerTerminalContextsRef}
+      shouldAutoScrollRef={shouldAutoScrollRef}
+      scheduleStickToBottom={scheduleStickToBottom}
+      onSend={onSend}
+      onInterrupt={onInterrupt}
+      onImplementPlanInNewThread={onImplementPlanInNewThread}
+      onRespondToApproval={onRespondToApproval}
+      onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}
+      onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
+      onPreviousActivePendingUserInputQuestion={onPreviousActivePendingUserInputQuestion}
+      onChangeActivePendingUserInputCustomAnswer={onChangeActivePendingUserInputCustomAnswer}
+      onProviderModelSelect={onProviderModelSelect}
+      toggleInteractionMode={toggleInteractionMode}
+      handleRuntimeModeChange={handleRuntimeModeChange}
+      handleInteractionModeChange={handleInteractionModeChange}
+      togglePlanSidebar={togglePlanSidebar}
+      focusComposer={focusComposer}
+      scheduleComposerFocus={scheduleComposerFocus}
+      setThreadError={setThreadError}
+      onExpandImage={onExpandImage}
+    />
+  );
+});
+
+interface PlanSidebarContainerProps {
+  routeKind: "server" | "draft";
+  routeThreadRef: ScopedThreadRef;
+  draftThreadView: Thread | undefined;
+  activeThreadId: ThreadId | null;
+  activeLatestTurn: Thread["latestTurn"] | null;
+  latestTurnSettled: boolean;
+  environmentId: EnvironmentId;
+  markdownCwd: string | undefined;
+  workspaceRoot: string | undefined;
+  timestampFormat: UnifiedSettings["timestampFormat"];
+  open: boolean;
+  setOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  planSidebarDismissedForTurnRef: React.MutableRefObject<string | null>;
+  currentTurnKeyRef: React.MutableRefObject<string | null>;
+}
+
+const PlanSidebarContainer = memo(function PlanSidebarContainer(props: PlanSidebarContainerProps) {
+  const {
+    routeKind,
+    routeThreadRef,
+    draftThreadView,
+    activeThreadId,
+    activeLatestTurn,
+    latestTurnSettled,
+    environmentId,
+    markdownCwd,
+    workspaceRoot,
+    timestampFormat,
+    open,
+    setOpen,
+    planSidebarDismissedForTurnRef,
+    currentTurnKeyRef,
+  } = props;
+  const serverThreadActivities = useStore(
+    useMemo(
+      () => createThreadActivitiesSelectorByRef(routeKind === "server" ? routeThreadRef : null),
+      [routeKind, routeThreadRef],
+    ),
+  );
+  const threadActivities =
+    routeKind === "server"
+      ? serverThreadActivities
+      : (draftThreadView?.activities ?? EMPTY_ACTIVITIES);
+  const threadPlanCatalog = useThreadPlanCatalog(
+    useMemo(() => {
+      const threadIds: ThreadId[] = [];
+      if (activeThreadId) {
+        threadIds.push(activeThreadId);
+      }
+      const sourceThreadId = activeLatestTurn?.sourceProposedPlan?.threadId;
+      if (sourceThreadId && sourceThreadId !== activeThreadId) {
+        threadIds.push(sourceThreadId);
+      }
+      return threadIds;
+    }, [activeLatestTurn?.sourceProposedPlan?.threadId, activeThreadId]),
+  );
+  const activePlan = useMemo(
+    () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, threadActivities],
+  );
+  const sidebarProposedPlan = useMemo(
+    () =>
+      findSidebarProposedPlan({
+        threads: threadPlanCatalog,
+        latestTurn: activeLatestTurn,
+        latestTurnSettled,
+        threadId: activeThreadId,
+      }),
+    [activeLatestTurn, activeThreadId, latestTurnSettled, threadPlanCatalog],
+  );
+  const currentTurnKey = activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? null;
+
+  useEffect(() => {
+    currentTurnKeyRef.current = currentTurnKey;
+  }, [currentTurnKey, currentTurnKeyRef]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <PlanSidebar
+      activePlan={activePlan}
+      activeProposedPlan={sidebarProposedPlan}
+      environmentId={environmentId}
+      markdownCwd={markdownCwd}
+      workspaceRoot={workspaceRoot}
+      timestampFormat={timestampFormat}
+      onClose={() => {
+        setOpen(false);
+        if (currentTurnKey) {
+          planSidebarDismissedForTurnRef.current = currentTurnKey;
+        }
+      }}
+    />
+  );
+});
+
 export default function ChatView(props: ChatViewProps) {
   const { environmentId, threadId, routeKind, onDiffPanelOpen } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
@@ -574,25 +1115,36 @@ export default function ChatView(props: ChatViewProps) {
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
   const composerDraftTarget: ScopedThreadRef | DraftId =
     routeKind === "server" ? routeThreadRef : props.draftId;
-  const serverThread = useStore(
+  const serverThreadShell = useStore(
     useMemo(
-      () => createThreadSelectorByRef(routeKind === "server" ? routeThreadRef : null),
+      () => createThreadStaticShellSelectorByRef(routeKind === "server" ? routeThreadRef : null),
+      [routeKind, routeThreadRef],
+    ),
+  );
+  const serverThreadRuntime = useStore(
+    useMemo(
+      () =>
+        createThreadRuntimeSnapshotSelectorByRef(routeKind === "server" ? routeThreadRef : null),
+      [routeKind, routeThreadRef],
+    ),
+  );
+  const serverMessageIds = useStore(
+    useMemo(
+      () => createThreadMessageIdsSelectorByRef(routeKind === "server" ? routeThreadRef : null),
+      [routeKind, routeThreadRef],
+    ),
+  );
+  const serverThreadPending = useStore(
+    useMemo(
+      () =>
+        createThreadPendingSnapshotSelectorByRef(routeKind === "server" ? routeThreadRef : null),
       [routeKind, routeThreadRef],
     ),
   );
   const setStoreThreadError = useStore((store) => store.setError);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
-  const setThreadChangedFilesExpanded = useUiStateStore(
-    (store) => store.setThreadChangedFilesExpanded,
-  );
   const activeThreadLastVisitedAt = useUiStateStore((store) =>
     routeKind === "server" ? store.threadLastVisitedAtById[routeThreadKey] : undefined,
-  );
-  const changedFilesExpandedByTurnId = useUiStateStore((store) =>
-    routeKind === "server"
-      ? (store.threadChangedFilesExpandedById[routeThreadKey] ??
-        EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID)
-      : EMPTY_CHANGED_FILES_EXPANDED_BY_TURN_ID,
   );
   const settings = useSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
@@ -701,6 +1253,7 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
+  const planSidebarCurrentTurnKeyRef = useRef<string | null>(null);
   const setMessagesScrollContainerRef = useCallback((element: HTMLDivElement | null) => {
     messagesScrollRef.current = element;
     setMessagesScrollElement(element);
@@ -758,6 +1311,7 @@ export default function ChatView(props: ChatViewProps) {
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelectorByRef(fallbackDraftProjectRef), [fallbackDraftProjectRef]),
   );
+  const serverThread = serverThreadShell;
   const localDraftError =
     routeKind === "server" && serverThread
       ? null
@@ -777,8 +1331,14 @@ export default function ChatView(props: ChatViewProps) {
         : undefined,
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
-  const isServerThread = routeKind === "server" && serverThread !== undefined;
-  const activeThread = isServerThread ? serverThread : localDraftThread;
+  const isServerThread = routeKind === "server" && serverThreadShell !== undefined;
+  const activeThread = isServerThread ? serverThreadShell : localDraftThread;
+  const activeThreadSession = isServerThread
+    ? (serverThreadRuntime?.session ?? null)
+    : (localDraftThread?.session ?? null);
+  const activeMessageCount = isServerThread
+    ? serverMessageIds.length
+    : (localDraftThread?.messages.length ?? 0);
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
@@ -795,20 +1355,9 @@ export default function ChatView(props: ChatViewProps) {
     const existingThreadKeys = new Set<string>([...serverThreadKeys, ...draftThreadKeys]);
     return openTerminalThreadKeys.filter((nextThreadKey) => existingThreadKeys.has(nextThreadKey));
   }, [draftThreadKeys, openTerminalThreadKeys, serverThreadKeys]);
-  const activeLatestTurn = activeThread?.latestTurn ?? null;
-  const threadPlanCatalog = useThreadPlanCatalog(
-    useMemo(() => {
-      const threadIds: ThreadId[] = [];
-      if (activeThread?.id) {
-        threadIds.push(activeThread.id);
-      }
-      const sourceThreadId = activeLatestTurn?.sourceProposedPlan?.threadId;
-      if (sourceThreadId && sourceThreadId !== activeThread?.id) {
-        threadIds.push(sourceThreadId);
-      }
-      return threadIds;
-    }, [activeLatestTurn?.sourceProposedPlan?.threadId, activeThread?.id]),
-  );
+  const activeLatestTurn = isServerThread
+    ? (serverThreadRuntime?.latestTurn ?? null)
+    : (localDraftThread?.latestTurn ?? null);
   useEffect(() => {
     setMountedTerminalThreadKeys((currentThreadIds) => {
       const nextThreadIds = reconcileMountedTerminalThreadIds({
@@ -824,7 +1373,7 @@ export default function ChatView(props: ChatViewProps) {
         : nextThreadIds;
     });
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalState.terminalOpen]);
-  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
+  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThreadSession);
   const activeProjectRef = activeThread
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
     : null;
@@ -984,16 +1533,6 @@ export default function ChatView(props: ChatViewProps) {
     [openOrReuseProjectDraftThread],
   );
 
-  const handleSetChangedFilesExpanded = useCallback(
-    (turnId: TurnId, expanded: boolean) => {
-      if (routeKind !== "server") {
-        return;
-      }
-      setThreadChangedFilesExpanded(routeThreadKey, turnId, expanded);
-    },
-    [routeKind, routeThreadKey, setThreadChangedFilesExpanded],
-  );
-
   useEffect(() => {
     if (!serverThread?.id) return;
     if (!latestTurnSettled) return;
@@ -1017,7 +1556,13 @@ export default function ChatView(props: ChatViewProps) {
   const threadProvider =
     activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
   const lockedProvider = deriveLockedProvider({
-    thread: activeThread,
+    thread: activeThread
+      ? {
+          latestTurn: activeLatestTurn,
+          session: activeThreadSession,
+          messageCount: activeMessageCount,
+        }
+      : null,
     selectedProvider: selectedProviderByThreadId,
     threadProvider,
   });
@@ -1038,86 +1583,9 @@ export default function ChatView(props: ChatViewProps) {
     selectedProviderByThreadId ?? threadProvider ?? "codex",
   );
   const selectedProvider: ProviderKind = lockedProvider ?? unlockedSelectedProvider;
-  const phase = derivePhase(activeThread?.session ?? null);
-  const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
-  const workLogEntries = useMemo(
-    () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
-  );
-  const latestTurnHasToolActivity = useMemo(
-    () => hasToolActivityForTurn(threadActivities, activeLatestTurn?.turnId),
-    [activeLatestTurn?.turnId, threadActivities],
-  );
-  const pendingApprovals = useMemo(
-    () => derivePendingApprovals(threadActivities),
-    [threadActivities],
-  );
-  const pendingUserInputs = useMemo(
-    () => derivePendingUserInputs(threadActivities),
-    [threadActivities],
-  );
-  const activePendingUserInput = pendingUserInputs[0] ?? null;
-  const activePendingDraftAnswers = useMemo(
-    () =>
-      activePendingUserInput
-        ? (pendingUserInputAnswersByRequestId[activePendingUserInput.requestId] ??
-          EMPTY_PENDING_USER_INPUT_ANSWERS)
-        : EMPTY_PENDING_USER_INPUT_ANSWERS,
-    [activePendingUserInput, pendingUserInputAnswersByRequestId],
-  );
-  const activePendingQuestionIndex = activePendingUserInput
-    ? (pendingUserInputQuestionIndexByRequestId[activePendingUserInput.requestId] ?? 0)
-    : 0;
-  const activePendingProgress = useMemo(
-    () =>
-      activePendingUserInput
-        ? derivePendingUserInputProgress(
-            activePendingUserInput.questions,
-            activePendingDraftAnswers,
-            activePendingQuestionIndex,
-          )
-        : null,
-    [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
-  );
-  const activePendingResolvedAnswers = useMemo(
-    () =>
-      activePendingUserInput
-        ? buildPendingUserInputAnswers(activePendingUserInput.questions, activePendingDraftAnswers)
-        : null,
-    [activePendingDraftAnswers, activePendingUserInput],
-  );
-  const activePendingIsResponding = activePendingUserInput
-    ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
-    : false;
-  const activeProposedPlan = useMemo(() => {
-    if (!latestTurnSettled) {
-      return null;
-    }
-    return findLatestProposedPlan(
-      activeThread?.proposedPlans ?? [],
-      activeLatestTurn?.turnId ?? null,
-    );
-  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
-  const sidebarProposedPlan = useMemo(
-    () =>
-      findSidebarProposedPlan({
-        threads: threadPlanCatalog,
-        latestTurn: activeLatestTurn,
-        latestTurnSettled,
-        threadId: activeThread?.id ?? null,
-      }),
-    [activeLatestTurn, activeThread?.id, latestTurnSettled, threadPlanCatalog],
-  );
-  const activePlan = useMemo(
-    () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
-  );
-  const showPlanFollowUpPrompt =
-    pendingUserInputs.length === 0 &&
-    interactionMode === "plan" &&
-    latestTurnSettled &&
-    hasActionableProposedPlan(activeProposedPlan);
-  const activePendingApproval = pendingApprovals[0] ?? null;
+  const phase = isServerThread
+    ? (serverThreadRuntime?.phase ?? derivePhase(null))
+    : derivePhase(localDraftThread?.session ?? null);
   const {
     beginLocalDispatch,
     resetLocalDispatch,
@@ -1125,11 +1593,17 @@ export default function ChatView(props: ChatViewProps) {
     isPreparingWorktree,
     isSendBusy,
   } = useLocalDispatchState({
-    activeThread,
+    activeThread:
+      activeThread && activeThreadSession !== undefined
+        ? {
+            latestTurn: activeLatestTurn,
+            session: activeThreadSession,
+          }
+        : undefined,
     activeLatestTurn,
     phase,
-    activePendingApproval: activePendingApproval?.requestId ?? null,
-    activePendingUserInput: activePendingUserInput?.requestId ?? null,
+    activePendingApproval: isServerThread ? serverThreadPending.pendingApprovalRequestId : null,
+    activePendingUserInput: isServerThread ? serverThreadPending.pendingUserInputRequestId : null,
     threadError: activeThread?.error,
   });
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
@@ -1193,141 +1667,6 @@ export default function ChatView(props: ChatViewProps) {
       return next;
     });
   }, []);
-  const serverMessages = activeThread?.messages;
-  useEffect(() => {
-    if (typeof Image === "undefined" || !serverMessages || serverMessages.length === 0) {
-      return;
-    }
-
-    const cleanups: Array<() => void> = [];
-
-    for (const [messageId, handoffPreviewUrls] of Object.entries(
-      attachmentPreviewHandoffByMessageId,
-    )) {
-      if (attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId]) {
-        continue;
-      }
-
-      const serverMessage = serverMessages.find(
-        (message) => message.id === messageId && message.role === "user",
-      );
-      if (!serverMessage?.attachments || serverMessage.attachments.length === 0) {
-        continue;
-      }
-
-      const serverPreviewUrls = serverMessage.attachments.flatMap((attachment) =>
-        attachment.type === "image" && attachment.previewUrl ? [attachment.previewUrl] : [],
-      );
-      if (
-        serverPreviewUrls.length === 0 ||
-        serverPreviewUrls.length !== handoffPreviewUrls.length ||
-        serverPreviewUrls.some((previewUrl) => previewUrl.startsWith("blob:"))
-      ) {
-        continue;
-      }
-
-      attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId] = true;
-
-      let cancelled = false;
-      const imageInstances: HTMLImageElement[] = [];
-
-      const preloadServerPreviews = Promise.all(
-        serverPreviewUrls.map(
-          (previewUrl) =>
-            new Promise<void>((resolve, reject) => {
-              const image = new Image();
-              imageInstances.push(image);
-              const handleLoad = () => resolve();
-              const handleError = () =>
-                reject(new Error(`Failed to load server preview for ${messageId}.`));
-              image.addEventListener("load", handleLoad, { once: true });
-              image.addEventListener("error", handleError, { once: true });
-              image.src = previewUrl;
-            }),
-        ),
-      );
-
-      void preloadServerPreviews
-        .then(() => {
-          if (cancelled) {
-            return;
-          }
-          clearAttachmentPreviewHandoff(messageId as MessageId, handoffPreviewUrls);
-        })
-        .catch(() => {
-          if (!cancelled) {
-            delete attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId];
-          }
-        });
-
-      cleanups.push(() => {
-        cancelled = true;
-        delete attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId];
-        for (const image of imageInstances) {
-          image.src = "";
-        }
-      });
-    }
-
-    return () => {
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
-    };
-  }, [attachmentPreviewHandoffByMessageId, clearAttachmentPreviewHandoff, serverMessages]);
-  const timelineMessages = useMemo(() => {
-    const messages = serverMessages ?? [];
-    const serverMessagesWithPreviewHandoff =
-      Object.keys(attachmentPreviewHandoffByMessageId).length === 0
-        ? messages
-        : // Spread only fires for the few messages that actually changed;
-          // unchanged ones early-return their original reference.
-          // In-place mutation would break React's immutable state contract.
-          // oxlint-disable-next-line no-map-spread
-          messages.map((message) => {
-            if (
-              message.role !== "user" ||
-              !message.attachments ||
-              message.attachments.length === 0
-            ) {
-              return message;
-            }
-            const handoffPreviewUrls = attachmentPreviewHandoffByMessageId[message.id];
-            if (!handoffPreviewUrls || handoffPreviewUrls.length === 0) {
-              return message;
-            }
-
-            let changed = false;
-            let imageIndex = 0;
-            const attachments = message.attachments.map((attachment) => {
-              if (attachment.type !== "image") {
-                return attachment;
-              }
-              const handoffPreviewUrl = handoffPreviewUrls[imageIndex];
-              imageIndex += 1;
-              if (!handoffPreviewUrl || attachment.previewUrl === handoffPreviewUrl) {
-                return attachment;
-              }
-              changed = true;
-              return {
-                ...attachment,
-                previewUrl: handoffPreviewUrl,
-              };
-            });
-
-            return changed ? { ...message, attachments } : message;
-          });
-
-    if (optimisticUserMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
-    if (pendingMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [serverMessages, attachmentPreviewHandoffByMessageId, optimisticUserMessages]);
   const gitCwd = activeProject
     ? projectScriptCwd({
         project: { cwd: activeProject.cwd },
@@ -1411,8 +1750,8 @@ export default function ChatView(props: ChatViewProps) {
 
   const envLocked = Boolean(
     activeThread &&
-    (activeThread.messages.length > 0 ||
-      (activeThread.session !== null && activeThread.session.status !== "closed")),
+    (activeMessageCount > 0 ||
+      (activeThreadSession !== null && activeThreadSession.status !== "closed")),
   );
 
   // Handle environment change for draft threads.  When the user picks a
@@ -1822,7 +2161,7 @@ export default function ChatView(props: ChatViewProps) {
   const togglePlanSidebar = useCallback(() => {
     setPlanSidebarOpen((open) => {
       if (open) {
-        const turnKey = activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? null;
+        const turnKey = planSidebarCurrentTurnKeyRef.current;
         if (turnKey) {
           planSidebarDismissedForTurnRef.current = turnKey;
         }
@@ -1831,7 +2170,7 @@ export default function ChatView(props: ChatViewProps) {
       }
       return !open;
     });
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  }, []);
 
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
@@ -1887,8 +2226,6 @@ export default function ChatView(props: ChatViewProps) {
     [environmentId, serverThread],
   );
 
-  // Auto-scroll on new messages
-  const messageCount = timelineMessages.length;
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const scrollContainer = messagesScrollRef.current;
     if (!scrollContainer) return;
@@ -2038,10 +2375,6 @@ export default function ChatView(props: ChatViewProps) {
     };
   }, [activeThread?.id, scheduleStickToBottom]);
   useEffect(() => {
-    if (!shouldAutoScrollRef.current) return;
-    scheduleStickToBottom();
-  }, [messageCount, scheduleStickToBottom]);
-  useEffect(() => {
     setPullRequestDialogState(null);
     if (planSidebarOpenOnNextThreadRef.current) {
       planSidebarOpenOnNextThreadRef.current = false;
@@ -2067,11 +2400,11 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThread?.id, focusComposer, terminalState.terminalOpen]);
 
   useEffect(() => {
-    if (!activeThread?.id) return;
-    if (activeThread.messages.length === 0) {
+    if (!isServerThread || !activeThread?.id) return;
+    if (serverMessageIds.length === 0) {
       return;
     }
-    const serverIds = new Set(activeThread.messages.map((message) => message.id));
+    const serverIds = new Set(serverMessageIds);
     const removedMessages = optimisticUserMessages.filter((message) => serverIds.has(message.id));
     if (removedMessages.length === 0) {
       return;
@@ -2092,7 +2425,13 @@ export default function ChatView(props: ChatViewProps) {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [activeThread?.id, activeThread?.messages, handoffAttachmentPreviews, optimisticUserMessages]);
+  }, [
+    activeThread?.id,
+    handoffAttachmentPreviews,
+    isServerThread,
+    optimisticUserMessages,
+    serverMessageIds,
+  ]);
 
   useEffect(() => {
     setOptimisticUserMessages((existing) => {
@@ -2352,12 +2691,30 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
-  const onSend = async (e?: { preventDefault: () => void }) => {
+  const handleSend = useEffectEvent(async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread || isSendBusy || isConnecting || sendInFlightRef.current) return;
+    const currentConversation = resolveCurrentConversationDispatchState();
+    const activePendingUserInput = currentConversation.activePendingUserInput;
+    const activePendingProgress = currentConversation.activePendingProgress;
     if (activePendingProgress) {
-      onAdvanceActivePendingUserInput();
+      if (!activePendingUserInput) {
+        return;
+      }
+      if (activePendingProgress.isLastQuestion) {
+        if (currentConversation.activePendingResolvedAnswers) {
+          void onRespondToUserInput(
+            activePendingUserInput.requestId,
+            currentConversation.activePendingResolvedAnswers,
+          );
+        }
+      } else {
+        setPendingUserInputQuestionIndexByRequestId((existing) => ({
+          ...existing,
+          [activePendingUserInput.requestId]: activePendingProgress.questionIndex + 1,
+        }));
+      }
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
@@ -2382,10 +2739,10 @@ export default function ChatView(props: ChatViewProps) {
       imageCount: composerImages.length,
       terminalContexts: composerTerminalContexts,
     });
-    if (showPlanFollowUpPrompt && activeProposedPlan) {
+    if (currentConversation.showPlanFollowUpPrompt && currentConversation.activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
-        planMarkdown: activeProposedPlan.planMarkdown,
+        planMarkdown: currentConversation.activeProposedPlan.planMarkdown,
       });
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
@@ -2423,7 +2780,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
-    const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    const isFirstMessage = !isServerThread || activeMessageCount === 0;
     const baseBranchForWorktree =
       isFirstMessage && envMode === "worktree" && !activeThread.worktreePath
         ? activeThread.branch
@@ -2641,9 +2998,13 @@ export default function ChatView(props: ChatViewProps) {
     if (!turnStartSucceeded) {
       resetLocalDispatch();
     }
-  };
+  });
 
-  const onInterrupt = async () => {
+  const onSend = useCallback((e?: { preventDefault: () => void }) => {
+    void handleSend(e);
+  }, []);
+
+  const handleInterrupt = useEffectEvent(async () => {
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread) return;
     await api.orchestration.dispatchCommand({
@@ -2652,7 +3013,11 @@ export default function ChatView(props: ChatViewProps) {
       threadId: activeThread.id,
       createdAt: new Date().toISOString(),
     });
-  };
+  });
+
+  const onInterrupt = useCallback(() => {
+    void handleInterrupt();
+  }, []);
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -2710,111 +3075,63 @@ export default function ChatView(props: ChatViewProps) {
     [activeThreadId, environmentId, setThreadError],
   );
 
-  const setActivePendingUserInputQuestionIndex = useCallback(
-    (nextQuestionIndex: number) => {
-      if (!activePendingUserInput) {
-        return;
-      }
-      setPendingUserInputQuestionIndexByRequestId((existing) => ({
-        ...existing,
-        [activePendingUserInput.requestId]: nextQuestionIndex,
-      }));
-    },
-    [activePendingUserInput],
-  );
+  const resolveCurrentConversationDispatchState = useCallback(() => {
+    const threadActivities = isServerThread
+      ? createThreadActivitiesSelectorByRef(routeThreadRef)(useStore.getState())
+      : (localDraftThread?.activities ?? EMPTY_ACTIVITIES);
+    const threadProposedPlans = isServerThread
+      ? createThreadProposedPlansSelectorByRef(routeThreadRef)(useStore.getState())
+      : (localDraftThread?.proposedPlans ?? EMPTY_PROPOSED_PLANS);
+    const nextLatestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThreadSession);
+    const nextPendingUserInputs = derivePendingUserInputs(threadActivities);
+    const nextActivePendingUserInput = nextPendingUserInputs[0] ?? null;
+    const nextActivePendingDraftAnswers = nextActivePendingUserInput
+      ? (pendingUserInputAnswersByRequestId[nextActivePendingUserInput.requestId] ??
+        EMPTY_PENDING_USER_INPUT_ANSWERS)
+      : EMPTY_PENDING_USER_INPUT_ANSWERS;
+    const nextActivePendingQuestionIndex = nextActivePendingUserInput
+      ? (pendingUserInputQuestionIndexByRequestId[nextActivePendingUserInput.requestId] ?? 0)
+      : 0;
+    const nextActivePendingProgress = nextActivePendingUserInput
+      ? derivePendingUserInputProgress(
+          nextActivePendingUserInput.questions,
+          nextActivePendingDraftAnswers,
+          nextActivePendingQuestionIndex,
+        )
+      : null;
+    const nextActivePendingResolvedAnswers = nextActivePendingUserInput
+      ? buildPendingUserInputAnswers(
+          nextActivePendingUserInput.questions,
+          nextActivePendingDraftAnswers,
+        )
+      : null;
+    const nextActiveProposedPlan = nextLatestTurnSettled
+      ? findLatestProposedPlan(threadProposedPlans, activeLatestTurn?.turnId ?? null)
+      : null;
+    const nextShowPlanFollowUpPrompt =
+      nextPendingUserInputs.length === 0 &&
+      interactionMode === "plan" &&
+      nextLatestTurnSettled &&
+      hasActionableProposedPlan(nextActiveProposedPlan);
 
-  const onSelectActivePendingUserInputOption = useCallback(
-    (questionId: string, optionLabel: string) => {
-      if (!activePendingUserInput) {
-        return;
-      }
-      setPendingUserInputAnswersByRequestId((existing) => {
-        const question =
-          (activePendingProgress?.activeQuestion?.id === questionId
-            ? activePendingProgress.activeQuestion
-            : undefined) ??
-          activePendingUserInput.questions.find((entry) => entry.id === questionId);
-        if (!question) {
-          return existing;
-        }
-
-        return {
-          ...existing,
-          [activePendingUserInput.requestId]: {
-            ...existing[activePendingUserInput.requestId],
-            [questionId]: togglePendingUserInputOptionSelection(
-              question,
-              existing[activePendingUserInput.requestId]?.[questionId],
-              optionLabel,
-            ),
-          },
-        };
-      });
-      promptRef.current = "";
-      composerRef.current?.resetCursorState({ cursor: 0 });
-    },
-    [activePendingProgress?.activeQuestion, activePendingUserInput],
-  );
-
-  const onChangeActivePendingUserInputCustomAnswer = useCallback(
-    (
-      questionId: string,
-      value: string,
-      nextCursor: number,
-      expandedCursor: number,
-      _cursorAdjacentToMention: boolean,
-    ) => {
-      if (!activePendingUserInput) {
-        return;
-      }
-      promptRef.current = value;
-      setPendingUserInputAnswersByRequestId((existing) => ({
-        ...existing,
-        [activePendingUserInput.requestId]: {
-          ...existing[activePendingUserInput.requestId],
-          [questionId]: setPendingUserInputCustomAnswer(
-            existing[activePendingUserInput.requestId]?.[questionId],
-            value,
-          ),
-        },
-      }));
-      const snapshot = composerRef.current?.readSnapshot();
-      if (
-        snapshot?.value !== value ||
-        snapshot.cursor !== nextCursor ||
-        snapshot.expandedCursor !== expandedCursor
-      ) {
-        composerRef.current?.focusAt(nextCursor);
-      }
-    },
-    [activePendingUserInput],
-  );
-
-  const onAdvanceActivePendingUserInput = useCallback(() => {
-    if (!activePendingUserInput || !activePendingProgress) {
-      return;
-    }
-    if (activePendingProgress.isLastQuestion) {
-      if (activePendingResolvedAnswers) {
-        void onRespondToUserInput(activePendingUserInput.requestId, activePendingResolvedAnswers);
-      }
-      return;
-    }
-    setActivePendingUserInputQuestionIndex(activePendingProgress.questionIndex + 1);
+    return {
+      activePendingUserInput: nextActivePendingUserInput,
+      activePendingProgress: nextActivePendingProgress,
+      activePendingResolvedAnswers: nextActivePendingResolvedAnswers,
+      activeProposedPlan: nextActiveProposedPlan,
+      showPlanFollowUpPrompt: nextShowPlanFollowUpPrompt,
+    };
   }, [
-    activePendingProgress,
-    activePendingResolvedAnswers,
-    activePendingUserInput,
-    onRespondToUserInput,
-    setActivePendingUserInputQuestionIndex,
+    activeLatestTurn,
+    activeThreadSession,
+    interactionMode,
+    isServerThread,
+    localDraftThread?.activities,
+    localDraftThread?.proposedPlans,
+    pendingUserInputAnswersByRequestId,
+    pendingUserInputQuestionIndexByRequestId,
+    routeThreadRef,
   ]);
-
-  const onPreviousActivePendingUserInputQuestion = useCallback(() => {
-    if (!activePendingProgress) {
-      return;
-    }
-    setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
-  }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
 
   const onSubmitPlanFollowUp = useCallback(
     async ({
@@ -2840,6 +3157,8 @@ export default function ChatView(props: ChatViewProps) {
       if (!trimmed) {
         return;
       }
+      const currentConversation = resolveCurrentConversationDispatchState();
+      const currentProposedPlan = currentConversation.activeProposedPlan;
 
       const sendCtx = composerRef.current?.getSendContext();
       if (!sendCtx) {
@@ -2910,11 +3229,11 @@ export default function ChatView(props: ChatViewProps) {
           titleSeed: activeThread.title,
           runtimeMode,
           interactionMode: nextInteractionMode,
-          ...(nextInteractionMode === "default" && activeProposedPlan
+          ...(nextInteractionMode === "default" && currentProposedPlan
             ? {
                 sourceProposedPlan: {
                   threadId: activeThread.id,
-                  planId: activeProposedPlan.id,
+                  planId: currentProposedPlan.id,
                 },
               }
             : {}),
@@ -2942,7 +3261,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
-      activeProposedPlan,
       beginLocalDispatch,
       forceStickToBottom,
       isConnecting,
@@ -2954,16 +3272,19 @@ export default function ChatView(props: ChatViewProps) {
       setComposerDraftInteractionMode,
       setThreadError,
       environmentId,
+      resolveCurrentConversationDispatchState,
     ],
   );
 
   const onImplementPlanInNewThread = useCallback(async () => {
     const api = readEnvironmentApi(environmentId);
+    const currentConversation = resolveCurrentConversationDispatchState();
+    const currentProposedPlan = currentConversation.activeProposedPlan;
     if (
       !api ||
       !activeThread ||
       !activeProject ||
-      !activeProposedPlan ||
+      !currentProposedPlan ||
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
@@ -2986,7 +3307,7 @@ export default function ChatView(props: ChatViewProps) {
 
     const createdAt = new Date().toISOString();
     const nextThreadId = newThreadId();
-    const planMarkdown = activeProposedPlan.planMarkdown;
+    const planMarkdown = currentProposedPlan.planMarkdown;
     const implementationPrompt = buildPlanImplementationPrompt(planMarkdown);
     const outgoingImplementationPrompt = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
@@ -3036,7 +3357,7 @@ export default function ChatView(props: ChatViewProps) {
           interactionMode: "default",
           sourceProposedPlan: {
             threadId: activeThread.id,
-            planId: activeProposedPlan.id,
+            planId: currentProposedPlan.id,
           },
           createdAt,
         });
@@ -3073,7 +3394,6 @@ export default function ChatView(props: ChatViewProps) {
       .then(finish, finish);
   }, [
     activeProject,
-    activeProposedPlan,
     activeThread,
     beginLocalDispatch,
     isConnecting,
@@ -3083,6 +3403,7 @@ export default function ChatView(props: ChatViewProps) {
     resetLocalDispatch,
     runtimeMode,
     environmentId,
+    resolveCurrentConversationDispatchState,
   ]);
 
   const onProviderModelSelect = useCallback(
@@ -3240,11 +3561,15 @@ export default function ChatView(props: ChatViewProps) {
                 activeTurnInProgress={activeTurnInProgress}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 activeThreadId={activeThread.id}
-                activeThreadSession={activeThread.session}
-                changedFilesExpandedByTurnId={changedFilesExpandedByTurnId}
+                activeThreadSession={activeThreadSession}
+                attachmentPreviewHandoffByMessageId={attachmentPreviewHandoffByMessageId}
+                clearAttachmentPreviewHandoff={clearAttachmentPreviewHandoff}
+                draftActivities={localDraftThread?.activities ?? EMPTY_ACTIVITIES}
+                draftMessages={localDraftThread?.messages ?? []}
+                draftProposedPlans={localDraftThread?.proposedPlans ?? EMPTY_PROPOSED_PLANS}
+                draftTurnDiffSummaries={localDraftThread?.turnDiffSummaries ?? []}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 isWorking={isWorking}
-                latestTurnHasToolActivity={latestTurnHasToolActivity}
                 latestTurnSettled={latestTurnSettled}
                 localDispatchStartedAt={localDispatchStartedAt}
                 markdownCwd={gitCwd ?? undefined}
@@ -3253,17 +3578,14 @@ export default function ChatView(props: ChatViewProps) {
                 onRevertToTurnCount={(turnCount) => {
                   void onRevertToTurnCount(turnCount);
                 }}
-                onSetChangedFilesExpanded={handleSetChangedFilesExpanded}
+                optimisticUserMessages={optimisticUserMessages}
                 phase={phase}
-                proposedPlans={activeThread.proposedPlans}
                 resolvedTheme={resolvedTheme}
                 scheduleStickToBottom={scheduleStickToBottom}
                 scrollContainer={messagesScrollElement}
                 shouldAutoScrollRef={shouldAutoScrollRef}
-                timelineMessages={timelineMessages}
                 timestampFormat={timestampFormat}
-                turnDiffSummaries={activeThread.turnDiffSummaries}
-                workLogEntries={workLogEntries}
+                threadRef={isServerThread ? routeThreadRef : null}
                 workspaceRoot={activeWorkspaceRoot}
               />
             </div>
@@ -3285,43 +3607,31 @@ export default function ChatView(props: ChatViewProps) {
 
           {/* Input bar */}
           <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
-            <ChatComposer
-              ref={composerRef}
+            <ChatComposerContainer
+              composerRef={composerRef}
               composerDraftTarget={composerDraftTarget}
               environmentId={environmentId}
               routeKind={routeKind}
               routeThreadRef={routeThreadRef}
               draftId={draftId}
+              draftThreadView={localDraftThread}
               activeThreadId={activeThreadId}
               activeThreadEnvironmentId={activeThread?.environmentId}
-              activeThread={activeThread}
               isServerThread={isServerThread}
               isLocalDraftThread={isLocalDraftThread}
-              phase={phase}
               isConnecting={isConnecting}
               isSendBusy={isSendBusy}
               isPreparingWorktree={isPreparingWorktree}
-              activePendingApproval={activePendingApproval}
-              pendingApprovals={pendingApprovals}
-              pendingUserInputs={pendingUserInputs}
-              activePendingProgress={activePendingProgress}
-              activePendingResolvedAnswers={activePendingResolvedAnswers}
-              activePendingIsResponding={activePendingIsResponding}
-              activePendingDraftAnswers={activePendingDraftAnswers}
-              activePendingQuestionIndex={activePendingQuestionIndex}
               respondingRequestIds={respondingRequestIds}
-              showPlanFollowUpPrompt={showPlanFollowUpPrompt}
-              activeProposedPlan={activeProposedPlan}
-              activePlan={activePlan as { turnId?: TurnId } | null}
-              sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
+              respondingUserInputRequestIds={respondingUserInputRequestIds}
+              pendingUserInputAnswersByRequestId={pendingUserInputAnswersByRequestId}
+              pendingUserInputQuestionIndexByRequestId={pendingUserInputQuestionIndexByRequestId}
               planSidebarOpen={planSidebarOpen}
               runtimeMode={runtimeMode}
               interactionMode={interactionMode}
               lockedProvider={lockedProvider}
               providerStatuses={providerStatuses as ServerProvider[]}
               activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
-              activeThreadModelSelection={activeThread?.modelSelection}
-              activeThreadActivities={activeThread?.activities}
               resolvedTheme={resolvedTheme}
               settings={settings}
               gitCwd={gitCwd}
@@ -3334,12 +3644,7 @@ export default function ChatView(props: ChatViewProps) {
               onInterrupt={onInterrupt}
               onImplementPlanInNewThread={onImplementPlanInNewThread}
               onRespondToApproval={onRespondToApproval}
-              onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}
-              onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
-              onPreviousActivePendingUserInputQuestion={onPreviousActivePendingUserInputQuestion}
-              onChangeActivePendingUserInputCustomAnswer={
-                onChangeActivePendingUserInputCustomAnswer
-              }
+              onRespondToUserInput={onRespondToUserInput}
               onProviderModelSelect={onProviderModelSelect}
               toggleInteractionMode={toggleInteractionMode}
               handleRuntimeModeChange={handleRuntimeModeChange}
@@ -3349,6 +3654,10 @@ export default function ChatView(props: ChatViewProps) {
               scheduleComposerFocus={scheduleComposerFocus}
               setThreadError={setThreadError}
               onExpandImage={onExpandTimelineImage}
+              setPendingUserInputQuestionIndexByRequestId={
+                setPendingUserInputQuestionIndexByRequestId
+              }
+              setPendingUserInputAnswersByRequestId={setPendingUserInputAnswersByRequestId}
             />
           </div>
 
@@ -3391,24 +3700,22 @@ export default function ChatView(props: ChatViewProps) {
         {/* end chat column */}
 
         {/* Plan sidebar */}
-        {planSidebarOpen ? (
-          <PlanSidebar
-            activePlan={activePlan}
-            activeProposedPlan={sidebarProposedPlan}
-            environmentId={environmentId}
-            markdownCwd={gitCwd ?? undefined}
-            workspaceRoot={activeWorkspaceRoot}
-            timestampFormat={timestampFormat}
-            onClose={() => {
-              setPlanSidebarOpen(false);
-              // Track that the user explicitly dismissed for this turn so auto-open won't fight them.
-              const turnKey = activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? null;
-              if (turnKey) {
-                planSidebarDismissedForTurnRef.current = turnKey;
-              }
-            }}
-          />
-        ) : null}
+        <PlanSidebarContainer
+          routeKind={routeKind}
+          routeThreadRef={routeThreadRef}
+          draftThreadView={localDraftThread}
+          activeThreadId={activeThread.id}
+          activeLatestTurn={activeLatestTurn}
+          latestTurnSettled={latestTurnSettled}
+          environmentId={environmentId}
+          markdownCwd={gitCwd ?? undefined}
+          workspaceRoot={activeWorkspaceRoot}
+          timestampFormat={timestampFormat}
+          open={planSidebarOpen}
+          setOpen={setPlanSidebarOpen}
+          planSidebarDismissedForTurnRef={planSidebarDismissedForTurnRef}
+          currentTurnKeyRef={planSidebarCurrentTurnKeyRef}
+        />
       </div>
       {/* end horizontal flex container */}
 

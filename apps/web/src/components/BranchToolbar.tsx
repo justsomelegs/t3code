@@ -4,7 +4,10 @@ import { memo, useMemo } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useStore } from "../store";
-import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
+import {
+  createProjectSelectorByRef,
+  createThreadBranchToolbarSnapshotSelectorByRef,
+} from "../storeSelectors";
 import {
   type EnvMode,
   type EnvironmentOption,
@@ -42,7 +45,10 @@ export const BranchToolbar = memo(function BranchToolbar({
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
   );
-  const serverThreadSelector = useMemo(() => createThreadSelectorByRef(threadRef), [threadRef]);
+  const serverThreadSelector = useMemo(
+    () => createThreadBranchToolbarSnapshotSelectorByRef(threadRef),
+    [threadRef],
+  );
   const serverThread = useStore(serverThreadSelector);
   const draftThread = useComposerDraftStore((store) =>
     draftId ? store.getDraftSession(draftId) : store.getDraftThreadByRef(threadRef),
