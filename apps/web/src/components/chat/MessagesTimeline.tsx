@@ -767,7 +767,7 @@ const TimelineRowItem = memo(function TimelineRowItem(props: TimelineRowItemProp
       ) : null}
     </div>
   );
-}, areTimelineRowItemPropsEqual);
+});
 
 const WorkGroupRow = memo(function WorkGroupRow(props: {
   row: Extract<TimelineRow, { kind: "work" }>;
@@ -1043,73 +1043,6 @@ const ChangedFilesSummaryCard = memo(function ChangedFilesSummaryCard(props: {
     </div>
   );
 });
-
-function areTimelineRowItemPropsEqual(
-  previous: Readonly<TimelineRowItemProps>,
-  next: Readonly<TimelineRowItemProps>,
-): boolean {
-  if (previous.row.kind !== next.row.kind || previous.row.id !== next.row.id) {
-    return false;
-  }
-
-  if (previous.row.kind === "work" && next.row.kind === "work") {
-    return (
-      previous.isExpandedWorkGroup === next.isExpandedWorkGroup &&
-      workEntriesEqual(previous.row.groupedEntries, next.row.groupedEntries)
-    );
-  }
-
-  if (
-    previous.row.kind === "message" &&
-    next.row.kind === "message" &&
-    previous.row.message.role === "user" &&
-    next.row.message.role === "user"
-  ) {
-    return (
-      previous.row.message === next.row.message &&
-      previous.canRevertAgentWork === next.canRevertAgentWork &&
-      previous.isRevertingCheckpoint === next.isRevertingCheckpoint &&
-      previous.isWorking === next.isWorking &&
-      previous.timestampFormat === next.timestampFormat
-    );
-  }
-
-  if (
-    previous.row.kind === "message" &&
-    next.row.kind === "message" &&
-    previous.row.message.role === "assistant" &&
-    next.row.message.role === "assistant"
-  ) {
-    return (
-      previous.row.message === next.row.message &&
-      previous.row.showCompletionDivider === next.row.showCompletionDivider &&
-      previous.completionSummary === next.completionSummary &&
-      previous.turnDiffSummary === next.turnDiffSummary &&
-      previous.changedFilesExpanded === next.changedFilesExpanded &&
-      previous.activeTurnInProgress === next.activeTurnInProgress &&
-      previous.activeTurnId === next.activeTurnId &&
-      previous.markdownCwd === next.markdownCwd &&
-      previous.resolvedTheme === next.resolvedTheme &&
-      previous.timestampFormat === next.timestampFormat &&
-      previous.nowIso === next.nowIso
-    );
-  }
-
-  if (previous.row.kind === "proposed-plan" && next.row.kind === "proposed-plan") {
-    return (
-      previous.row.proposedPlan === next.row.proposedPlan &&
-      previous.activeThreadEnvironmentId === next.activeThreadEnvironmentId &&
-      previous.markdownCwd === next.markdownCwd &&
-      previous.workspaceRoot === next.workspaceRoot
-    );
-  }
-
-  if (previous.row.kind === "working" && next.row.kind === "working") {
-    return previous.row.createdAt === next.row.createdAt && previous.nowIso === next.nowIso;
-  }
-
-  return false;
-}
 
 function workEntriesEqual(
   previous: ReadonlyArray<TimelineWorkEntry>,

@@ -60,6 +60,11 @@ const highlightedCodeCache = new LRUCache<string>(
   MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
 );
 const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
+const CHAT_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
+
+function markdownUrlTransform(href: string) {
+  return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
+}
 
 function extractFenceLanguage(className: string | undefined): string {
   const match = className?.match(CODE_FENCE_LANGUAGE_REGEX);
@@ -239,9 +244,6 @@ function SuspenseShikiCodeBlock({
 function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
-  const markdownUrlTransform = useCallback((href: string) => {
-    return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
-  }, []);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ node: _node, href, ...props }) {
@@ -295,7 +297,7 @@ function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
   return (
     <div className="chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={CHAT_MARKDOWN_REMARK_PLUGINS}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >
