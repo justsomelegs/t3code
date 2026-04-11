@@ -204,11 +204,32 @@ export const MessagesTimelineContainer = memo(function MessagesTimelineContainer
   const activeWorkEntries = threadRef
     ? (serverTimelineSlices.activeWorkEntries ?? EMPTY_WORK_LOG_ENTRIES)
     : deriveWorkLogEntries(draftActivities, activeLatestTurn?.turnId ?? undefined);
+  const settledLiveMessages = useMemo(() => {
+    const baseMessages = threadRef
+      ? (serverTimelineSlices.liveMessages ?? EMPTY_CHAT_MESSAGES)
+      : EMPTY_CHAT_MESSAGES;
+    const messagesWithPreviewHandoff = applyPreviewHandoff(baseMessages);
+    const canPromoteSettledLiveMessages =
+      phase === "connecting" &&
+      activeWorkEntries.length === 0 &&
+      messagesWithPreviewHandoff.length > 0 &&
+      messagesWithPreviewHandoff.every(
+        (message) => message.role === "assistant" && !message.streaming,
+      );
+    return canPromoteSettledLiveMessages ? messagesWithPreviewHandoff : EMPTY_CHAT_MESSAGES;
+  }, [activeWorkEntries, applyPreviewHandoff, phase, serverTimelineSlices.liveMessages, threadRef]);
   const liveTimelineMessages = useMemo(() => {
     const baseMessages = threadRef
       ? (serverTimelineSlices.liveMessages ?? EMPTY_CHAT_MESSAGES)
       : EMPTY_CHAT_MESSAGES;
     const messagesWithPreviewHandoff = applyPreviewHandoff(baseMessages);
+    if (settledLiveMessages.length > 0) {
+      const settledLiveMessageIds = new Set(settledLiveMessages.map((message) => message.id));
+      const pendingMessages = optimisticUserMessages.filter(
+        (message) => !settledLiveMessageIds.has(message.id),
+      );
+      return pendingMessages;
+    }
     if (optimisticUserMessages.length === 0) {
       return messagesWithPreviewHandoff;
     }
@@ -220,13 +241,15 @@ export const MessagesTimelineContainer = memo(function MessagesTimelineContainer
     if (pendingMessages.length === 0) {
       return messagesWithPreviewHandoff;
     }
-    const liveSectionIsAwaitingNextTurn =
+    const liveSectionContainsSettledPreviousTurnContent =
       activeWorkEntries.length === 0 &&
       messagesWithPreviewHandoff.length > 0 &&
       messagesWithPreviewHandoff.every(
         (message) => message.role === "assistant" && !message.streaming,
       );
-    return liveSectionIsAwaitingNextTurn
+    const shouldAppendOptimisticUserMessagesAfterSettledLiveMessages =
+      phase === "connecting" || liveSectionContainsSettledPreviousTurnContent;
+    return shouldAppendOptimisticUserMessagesAfterSettledLiveMessages
       ? [...messagesWithPreviewHandoff, ...pendingMessages]
       : [...pendingMessages, ...messagesWithPreviewHandoff];
   }, [
@@ -234,15 +257,43 @@ export const MessagesTimelineContainer = memo(function MessagesTimelineContainer
     applyPreviewHandoff,
     historicalTimelineMessages,
     optimisticUserMessages,
+    phase,
+    settledLiveMessages,
     serverTimelineSlices.liveMessages,
     threadRef,
   ]);
-  const historicalProposedPlans = threadRef
-    ? (serverTimelineSlices.historicalProposedPlans ?? EMPTY_PROPOSED_PLANS)
-    : draftProposedPlans;
-  const liveProposedPlans = threadRef
-    ? (serverTimelineSlices.liveProposedPlans ?? EMPTY_PROPOSED_PLANS)
-    : EMPTY_PROPOSED_PLANS;
+  const promotedLiveProposedPlans =
+    settledLiveMessages.length > 0
+      ? threadRef
+        ? (serverTimelineSlices.liveProposedPlans ?? EMPTY_PROPOSED_PLANS)
+        : EMPTY_PROPOSED_PLANS
+      : EMPTY_PROPOSED_PLANS;
+  const historicalProposedPlans = useMemo(() => {
+    const baseProposedPlans = threadRef
+      ? (serverTimelineSlices.historicalProposedPlans ?? EMPTY_PROPOSED_PLANS)
+      : draftProposedPlans;
+    return promotedLiveProposedPlans.length > 0
+      ? [...baseProposedPlans, ...promotedLiveProposedPlans]
+      : baseProposedPlans;
+  }, [
+    draftProposedPlans,
+    promotedLiveProposedPlans,
+    serverTimelineSlices.historicalProposedPlans,
+    threadRef,
+  ]);
+  const liveProposedPlans =
+    settledLiveMessages.length > 0
+      ? EMPTY_PROPOSED_PLANS
+      : threadRef
+        ? (serverTimelineSlices.liveProposedPlans ?? EMPTY_PROPOSED_PLANS)
+        : EMPTY_PROPOSED_PLANS;
+  const effectiveHistoricalTimelineMessages = useMemo(
+    () =>
+      settledLiveMessages.length > 0
+        ? [...historicalTimelineMessages, ...settledLiveMessages]
+        : historicalTimelineMessages,
+    [historicalTimelineMessages, settledLiveMessages],
+  );
   const turnDiffSummaries = threadRef
     ? (serverTimelineSlices.turnDiffSummaries ?? draftTurnDiffSummaries)
     : draftTurnDiffSummaries;
@@ -250,8 +301,8 @@ export const MessagesTimelineContainer = memo(function MessagesTimelineContainer
     ? serverTimelineSlices.latestTurnHasToolActivity
     : hasToolActivityForTurn(draftActivities, activeLatestTurn?.turnId);
   const historicalTimelineEntries = useMemo(
-    () => deriveTimelineEntries(historicalTimelineMessages, historicalProposedPlans, []),
-    [historicalProposedPlans, historicalTimelineMessages],
+    () => deriveTimelineEntries(effectiveHistoricalTimelineMessages, historicalProposedPlans, []),
+    [effectiveHistoricalTimelineMessages, historicalProposedPlans],
   );
   const liveTimelineEntries = useMemo(
     () => deriveTimelineEntries(liveTimelineMessages, liveProposedPlans, activeWorkEntries),
