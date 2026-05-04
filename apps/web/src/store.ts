@@ -197,6 +197,13 @@ function mapProposedPlan(proposedPlan: OrchestrationProposedPlan): ProposedPlan 
 }
 
 function mapTurnDiffSummary(checkpoint: OrchestrationCheckpointSummary): TurnDiffSummary {
+  const source =
+    checkpoint.source ??
+    (checkpoint.checkpointRef.startsWith("provider-diff:") ? "legacy-provider-diff" : "checkpoint");
+  const isRealCheckpoint =
+    source === "checkpoint" && checkpoint.checkpointRef.startsWith("refs/t3/checkpoints/");
+  const isRevertable = checkpoint.isRevertable ?? isRealCheckpoint;
+  const isFullDiffAvailable = checkpoint.isFullDiffAvailable ?? isRealCheckpoint;
   return {
     turnId: checkpoint.turnId,
     completedAt: checkpoint.completedAt,
@@ -204,6 +211,9 @@ function mapTurnDiffSummary(checkpoint: OrchestrationCheckpointSummary): TurnDif
     assistantMessageId: checkpoint.assistantMessageId ?? undefined,
     checkpointTurnCount: checkpoint.checkpointTurnCount,
     checkpointRef: checkpoint.checkpointRef,
+    source,
+    isRevertable,
+    isFullDiffAvailable,
     files: checkpoint.files.map((file) => ({ ...file })),
   };
 }
@@ -1413,13 +1423,7 @@ function applyEnvironmentOrchestrationEvent(
             ? buildLatestTurn({
                 previous: thread.latestTurn,
                 turnId: event.payload.turnId,
-                state: event.payload.streaming
-                  ? "running"
-                  : thread.latestTurn?.state === "interrupted"
-                    ? "interrupted"
-                    : thread.latestTurn?.state === "error"
-                      ? "error"
-                      : "completed",
+                state: thread.latestTurn?.state ?? "running",
                 requestedAt:
                   thread.latestTurn?.turnId === event.payload.turnId
                     ? thread.latestTurn.requestedAt
@@ -1429,11 +1433,10 @@ function applyEnvironmentOrchestrationEvent(
                     ? (thread.latestTurn.startedAt ?? event.payload.createdAt)
                     : event.payload.createdAt,
                 sourceProposedPlan: thread.pendingSourceProposedPlan,
-                completedAt: event.payload.streaming
-                  ? thread.latestTurn?.turnId === event.payload.turnId
+                completedAt:
+                  thread.latestTurn?.turnId === event.payload.turnId
                     ? (thread.latestTurn.completedAt ?? null)
-                    : null
-                  : event.payload.updatedAt,
+                    : null,
                 assistantMessageId: event.payload.messageId,
               })
             : thread.latestTurn;
@@ -1544,10 +1547,15 @@ function applyEnvironmentOrchestrationEvent(
             ? buildLatestTurn({
                 previous: thread.latestTurn,
                 turnId: event.payload.turnId,
-                state: checkpointStatusToLatestTurnState(event.payload.status),
+                state:
+                  event.payload.status === "error"
+                    ? "error"
+                    : thread.latestTurn?.state === "interrupted"
+                      ? "interrupted"
+                      : "completed",
                 requestedAt: thread.latestTurn?.requestedAt ?? event.payload.completedAt,
                 startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
-                completedAt: event.payload.completedAt,
+                completedAt: thread.latestTurn?.completedAt ?? event.payload.completedAt,
                 assistantMessageId: event.payload.assistantMessageId,
                 sourceProposedPlan: thread.pendingSourceProposedPlan,
               })
@@ -1559,6 +1567,34 @@ function applyEnvironmentOrchestrationEvent(
           updatedAt: event.occurredAt,
         };
       });
+
+    case "thread.turn-state-set":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        latestTurn: buildLatestTurn({
+          previous: thread.latestTurn,
+          turnId: event.payload.turnId,
+          state: event.payload.state,
+          requestedAt:
+            event.payload.requestedAt ??
+            (thread.latestTurn?.turnId === event.payload.turnId
+              ? thread.latestTurn.requestedAt
+              : event.occurredAt),
+          startedAt:
+            event.payload.startedAt ??
+            (thread.latestTurn?.turnId === event.payload.turnId
+              ? thread.latestTurn.startedAt
+              : event.occurredAt),
+          completedAt: event.payload.completedAt ?? null,
+          assistantMessageId:
+            event.payload.assistantMessageId ??
+            (thread.latestTurn?.turnId === event.payload.turnId
+              ? thread.latestTurn.assistantMessageId
+              : null),
+          sourceProposedPlan: thread.pendingSourceProposedPlan,
+        }),
+        updatedAt: event.occurredAt,
+      }));
 
     case "thread.reverted":
       return updateThreadState(state, event.payload.threadId, (thread) => {

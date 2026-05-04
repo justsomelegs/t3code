@@ -1588,7 +1588,7 @@ export default function ChatView(props: ChatViewProps) {
           break;
         }
         const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
-        if (!summary) {
+        if (!summary || summary.isRevertable === false) {
           continue;
         }
         const turnCount =

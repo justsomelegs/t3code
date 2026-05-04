@@ -2524,9 +2524,6 @@ describe("ProviderRuntimeIngestion", () => {
         ) &&
         entry.activities.some(
           (activity: ProviderRuntimeTestActivity) => activity.kind === "runtime.warning",
-        ) &&
-        entry.checkpoints.some(
-          (checkpoint: ProviderRuntimeTestCheckpoint) => checkpoint.turnId === "turn-p1",
         ),
     );
 
@@ -2563,12 +2560,12 @@ describe("ProviderRuntimeIngestion", () => {
     expect(warning?.kind).toBe("runtime.warning");
     expect(warningPayload?.message).toBe("Provider got slow");
 
-    const checkpoint = thread.checkpoints.find(
-      (entry: ProviderRuntimeTestCheckpoint) => entry.turnId === "turn-p1",
-    );
-    expect(checkpoint?.status).toBe("missing");
-    expect(checkpoint?.assistantMessageId).toBe("assistant:item-p1-assistant");
-    expect(checkpoint?.checkpointRef).toBe("provider-diff:evt-turn-diff-updated");
+    expect(
+      thread.checkpoints.some(
+        (entry: ProviderRuntimeTestCheckpoint) =>
+          entry.checkpointRef === "provider-diff:evt-turn-diff-updated",
+      ),
+    ).toBe(false);
   });
 
   it("projects context window updates into normalized thread activities", async () => {

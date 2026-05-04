@@ -6,12 +6,11 @@ import {
   type OrchestrationEvent,
   type OrchestrationMessage,
   type OrchestrationProposedPlanId,
-  CheckpointRef,
+  type OrchestrationTurnLifecycleState,
   isToolLifecycleItemType,
   ThreadId,
   type ThreadTokenUsageSnapshot,
   TurnId,
-  type OrchestrationCheckpointSummary,
   type OrchestrationProposedPlan,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
@@ -23,7 +22,6 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
-import { isGitRepository } from "../../git/Utils.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -132,31 +130,6 @@ function findProposedPlanById(
   return undefined;
 }
 
-function hasCheckpointForTurn(
-  checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>,
-  turnId: TurnId,
-): boolean {
-  for (let index = 0; index < checkpoints.length; index += 1) {
-    if (checkpoints[index]?.turnId === turnId) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function maxCheckpointTurnCount(
-  checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>,
-): number {
-  let maxTurnCount = 0;
-  for (let index = 0; index < checkpoints.length; index += 1) {
-    const checkpoint = checkpoints[index];
-    if (checkpoint && checkpoint.checkpointTurnCount > maxTurnCount) {
-      maxTurnCount = checkpoint.checkpointTurnCount;
-    }
-  }
-  return maxTurnCount;
-}
-
 function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
@@ -216,6 +189,23 @@ function normalizeRuntimeTurnState(
     case "completed":
       return value;
     default:
+      return "completed";
+  }
+}
+
+function turnLifecycleStateFromRuntimeEvent(
+  event: Extract<ProviderRuntimeEvent, { type: "turn.completed" | "turn.aborted" }>,
+): OrchestrationTurnLifecycleState {
+  if (event.type === "turn.aborted") {
+    return "interrupted";
+  }
+  switch (normalizeRuntimeTurnState(event.payload.state)) {
+    case "failed":
+      return "error";
+    case "interrupted":
+    case "cancelled":
+      return "interrupted";
+    case "completed":
       return "completed";
   }
 }
@@ -1206,6 +1196,7 @@ const make = Effect.gen(function* () {
           case "turn.started":
             return !conflictsWithActiveTurn;
           case "turn.completed":
+          case "turn.aborted":
             if (conflictsWithActiveTurn || missingTurnForActiveTurn) {
               return false;
             }
@@ -1230,12 +1221,15 @@ const make = Effect.gen(function* () {
         event.type === "session.exited" ||
         event.type === "thread.started" ||
         event.type === "turn.started" ||
-        event.type === "turn.completed"
+        event.type === "turn.completed" ||
+        event.type === "turn.aborted"
       ) {
         const nextActiveTurnId =
           event.type === "turn.started"
             ? (eventTurnId ?? null)
-            : event.type === "turn.completed" || event.type === "session.exited"
+            : event.type === "turn.completed" ||
+                event.type === "turn.aborted" ||
+                event.type === "session.exited"
               ? null
               : activeTurnId;
         const status = (() => {
@@ -1246,6 +1240,8 @@ const make = Effect.gen(function* () {
               return "running";
             case "session.exited":
               return "stopped";
+            case "turn.aborted":
+              return "interrupted";
             case "turn.completed":
               return normalizeRuntimeTurnState(event.payload.state) === "failed"
                 ? "error"
@@ -1260,12 +1256,14 @@ const make = Effect.gen(function* () {
         const lastError =
           event.type === "session.state.changed" && event.payload.state === "error"
             ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
-            : event.type === "turn.completed" &&
-                normalizeRuntimeTurnState(event.payload.state) === "failed"
-              ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
-              : status === "ready"
-                ? null
-                : (thread.session?.lastError ?? null);
+            : event.type === "turn.aborted"
+              ? (event.payload.reason ?? thread.session?.lastError ?? "Turn aborted")
+              : event.type === "turn.completed" &&
+                  normalizeRuntimeTurnState(event.payload.state) === "failed"
+                ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
+                : status === "ready"
+                  ? null
+                  : (thread.session?.lastError ?? null);
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -1306,6 +1304,45 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+
+          if (
+            (event.type === "turn.started" ||
+              event.type === "turn.completed" ||
+              event.type === "turn.aborted") &&
+            eventTurnId !== undefined
+          ) {
+            const latestAssistantMessageId =
+              event.type === "turn.started"
+                ? null
+                : Option.getOrNull(
+                    yield* getActiveAssistantMessageIdForTurn(thread.id, eventTurnId),
+                  );
+            yield* orchestrationEngine.dispatch({
+              type: "thread.turn.state.set",
+              commandId: providerCommandId(event, "thread-turn-state-set"),
+              threadId: thread.id,
+              turnId: eventTurnId,
+              state:
+                event.type === "turn.started"
+                  ? "running"
+                  : turnLifecycleStateFromRuntimeEvent(event),
+              requestedAt:
+                event.type === "turn.started"
+                  ? now
+                  : thread.latestTurn?.turnId === eventTurnId
+                    ? thread.latestTurn.requestedAt
+                    : undefined,
+              startedAt:
+                event.type === "turn.started"
+                  ? now
+                  : thread.latestTurn?.turnId === eventTurnId
+                    ? (thread.latestTurn.startedAt ?? now)
+                    : undefined,
+              completedAt: event.type === "turn.started" ? null : now,
+              assistantMessageId: latestAssistantMessageId,
+              createdAt: now,
+            });
+          }
         }
       }
 
@@ -1490,7 +1527,7 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (event.type === "turn.completed") {
+      if (event.type === "turn.completed" || event.type === "turn.aborted") {
         const detailedThread = yield* getLoadedThreadDetail();
         const messages = detailedThread?.messages ?? [];
         const proposedPlans = detailedThread?.proposedPlans ?? [];
@@ -1568,42 +1605,8 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (event.type === "turn.diff.updated") {
-        const turnId = toTurnId(event.turnId);
-        const checkpointContext = turnId
-          ? yield* projectionSnapshotQuery
-              .getThreadCheckpointContext(thread.id)
-              .pipe(Effect.map(Option.getOrUndefined))
-          : undefined;
-        const workspaceCwd =
-          checkpointContext?.worktreePath ?? checkpointContext?.workspaceRoot ?? undefined;
-        if (turnId && checkpointContext && workspaceCwd && isGitRepository(workspaceCwd)) {
-          // Skip if a checkpoint already exists for this turn. A real
-          // (non-placeholder) capture from CheckpointReactor should not
-          // be clobbered, and dispatching a duplicate placeholder for the
-          // same turnId would produce an unstable checkpointTurnCount.
-          if (hasCheckpointForTurn(checkpointContext.checkpoints, turnId)) {
-            // Already tracked; no-op.
-          } else {
-            const assistantMessageId = MessageId.make(
-              `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
-            );
-            yield* orchestrationEngine.dispatch({
-              type: "thread.turn.diff.complete",
-              commandId: providerCommandId(event, "thread-turn-diff-complete"),
-              threadId: thread.id,
-              turnId,
-              completedAt: now,
-              checkpointRef: CheckpointRef.make(`provider-diff:${event.eventId}`),
-              status: "missing",
-              files: [],
-              assistantMessageId,
-              checkpointTurnCount: maxCheckpointTurnCount(checkpointContext.checkpoints) + 1,
-              createdAt: now,
-            });
-          }
-        }
-      }
+      // turn.diff.updated is provider telemetry, not a terminal turn lifecycle event.
+      // Checkpoint capture is driven by terminal turn events in CheckpointReactor.
 
       const activities = runtimeEventToActivities(event);
       yield* Effect.forEach(activities, (activity) =>

@@ -16,6 +16,8 @@ import {
 } from "../Services/CheckpointDiffQuery.ts";
 
 const isTurnDiffResult = Schema.is(OrchestrationGetTurnDiffResult);
+const isRealCheckpointRef = (checkpointRef: string) =>
+  checkpointRef.startsWith("refs/t3/checkpoints/");
 
 const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -85,6 +87,13 @@ const make = Effect.gen(function* () {
           detail: `Checkpoint ref is unavailable for turn ${input.fromTurnCount}.`,
         });
       }
+      if (!isRealCheckpointRef(fromCheckpointRef)) {
+        return yield* new CheckpointUnavailableError({
+          threadId: input.threadId,
+          turnCount: input.fromTurnCount,
+          detail: `Turn ${input.fromTurnCount} is a legacy diff summary without a filesystem checkpoint.`,
+        });
+      }
 
       const toCheckpointRef = threadContext.value.checkpoints.find(
         (checkpoint) => checkpoint.checkpointTurnCount === input.toTurnCount,
@@ -94,6 +103,13 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           turnCount: input.toTurnCount,
           detail: `Checkpoint ref is unavailable for turn ${input.toTurnCount}.`,
+        });
+      }
+      if (!isRealCheckpointRef(toCheckpointRef)) {
+        return yield* new CheckpointUnavailableError({
+          threadId: input.threadId,
+          turnCount: input.toTurnCount,
+          detail: `Turn ${input.toTurnCount} is a legacy diff summary without a filesystem checkpoint.`,
         });
       }
 

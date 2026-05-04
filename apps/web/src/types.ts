@@ -79,6 +79,9 @@ export interface TurnDiffSummary {
   checkpointRef?: CheckpointRef | undefined;
   assistantMessageId?: MessageId | undefined;
   checkpointTurnCount?: number | undefined;
+  source?: "checkpoint" | "legacy-provider-diff" | undefined;
+  isRevertable?: boolean | undefined;
+  isFullDiffAvailable?: boolean | undefined;
 }
 
 export interface Project {

@@ -690,6 +690,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.turn.state.set": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.turn-state-set",
+        payload: {
+          threadId: command.threadId,
+          turnId: command.turnId,
+          state: command.state,
+          ...(command.requestedAt !== undefined ? { requestedAt: command.requestedAt } : {}),
+          ...(command.startedAt !== undefined ? { startedAt: command.startedAt } : {}),
+          ...(command.completedAt !== undefined ? { completedAt: command.completedAt } : {}),
+          ...(command.assistantMessageId !== undefined
+            ? { assistantMessageId: command.assistantMessageId }
+            : {}),
+        },
+      };
+    }
+
     case "thread.revert.complete": {
       yield* requireThread({
         readModel,

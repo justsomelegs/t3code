@@ -25,6 +25,7 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadTurnStateSetPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -559,8 +560,52 @@ export function projectEvent(
                 thread.latestTurn?.turnId === payload.turnId
                   ? (thread.latestTurn.startedAt ?? payload.completedAt)
                   : payload.completedAt,
-              completedAt: payload.completedAt,
+              completedAt:
+                thread.latestTurn?.turnId === payload.turnId
+                  ? (thread.latestTurn.completedAt ?? payload.completedAt)
+                  : payload.completedAt,
               assistantMessageId: payload.assistantMessageId,
+            },
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.turn-state-set":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadTurnStateSetPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            latestTurn: {
+              turnId: payload.turnId,
+              state: payload.state,
+              requestedAt:
+                payload.requestedAt ??
+                (thread.latestTurn?.turnId === payload.turnId
+                  ? thread.latestTurn.requestedAt
+                  : event.occurredAt),
+              startedAt:
+                payload.startedAt ??
+                (thread.latestTurn?.turnId === payload.turnId
+                  ? thread.latestTurn.startedAt
+                  : event.occurredAt),
+              completedAt: payload.completedAt ?? null,
+              assistantMessageId:
+                payload.assistantMessageId ??
+                (thread.latestTurn?.turnId === payload.turnId
+                  ? thread.latestTurn.assistantMessageId
+                  : null),
             },
             updatedAt: event.occurredAt,
           }),

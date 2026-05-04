@@ -716,7 +716,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
-        case "thread.turn-diff-completed": {
+        case "thread.turn-diff-completed":
+        case "thread.turn-state-set": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -1082,16 +1083,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               assistantMessageId: event.payload.messageId,
-              state: event.payload.streaming
-                ? existingTurn.value.state
-                : existingTurn.value.state === "interrupted"
-                  ? "interrupted"
-                  : existingTurn.value.state === "error"
-                    ? "error"
-                    : "completed",
-              completedAt: event.payload.streaming
-                ? existingTurn.value.completedAt
-                : (existingTurn.value.completedAt ?? event.payload.updatedAt),
+              completedAt: existingTurn.value.completedAt,
               startedAt: existingTurn.value.startedAt ?? event.payload.createdAt,
               requestedAt: existingTurn.value.requestedAt ?? event.payload.createdAt,
             });
@@ -1104,10 +1096,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             sourceProposedPlanThreadId: null,
             sourceProposedPlanId: null,
             assistantMessageId: event.payload.messageId,
-            state: event.payload.streaming ? "running" : "completed",
+            state: "running",
             requestedAt: event.payload.createdAt,
             startedAt: event.payload.createdAt,
-            completedAt: event.payload.streaming ? null : event.payload.updatedAt,
+            completedAt: null,
             checkpointTurnCount: null,
             checkpointRef: null,
             checkpointStatus: null,
@@ -1153,12 +1145,104 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.turn-state-set": {
+          const existingTurn = yield* projectionTurnRepository.getByTurnId({
+            threadId: event.payload.threadId,
+            turnId: event.payload.turnId,
+          });
+          const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isSome(existingTurn)) {
+            yield* projectionTurnRepository.upsertByTurnId({
+              ...existingTurn.value,
+              state: event.payload.state,
+              assistantMessageId:
+                event.payload.assistantMessageId ?? existingTurn.value.assistantMessageId,
+              requestedAt:
+                event.payload.requestedAt ??
+                existingTurn.value.requestedAt ??
+                (Option.isSome(pendingTurnStart)
+                  ? pendingTurnStart.value.requestedAt
+                  : event.occurredAt),
+              startedAt:
+                event.payload.startedAt !== undefined
+                  ? event.payload.startedAt
+                  : (existingTurn.value.startedAt ??
+                    (Option.isSome(pendingTurnStart)
+                      ? pendingTurnStart.value.requestedAt
+                      : event.occurredAt)),
+              completedAt:
+                event.payload.completedAt !== undefined
+                  ? event.payload.completedAt
+                  : event.payload.state === "running"
+                    ? null
+                    : (existingTurn.value.completedAt ?? event.occurredAt),
+              pendingMessageId:
+                existingTurn.value.pendingMessageId ??
+                (Option.isSome(pendingTurnStart) ? pendingTurnStart.value.messageId : null),
+              sourceProposedPlanThreadId:
+                existingTurn.value.sourceProposedPlanThreadId ??
+                (Option.isSome(pendingTurnStart)
+                  ? pendingTurnStart.value.sourceProposedPlanThreadId
+                  : null),
+              sourceProposedPlanId:
+                existingTurn.value.sourceProposedPlanId ??
+                (Option.isSome(pendingTurnStart)
+                  ? pendingTurnStart.value.sourceProposedPlanId
+                  : null),
+            });
+          } else {
+            yield* projectionTurnRepository.upsertByTurnId({
+              turnId: event.payload.turnId,
+              threadId: event.payload.threadId,
+              pendingMessageId: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.messageId
+                : null,
+              sourceProposedPlanThreadId: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.sourceProposedPlanThreadId
+                : null,
+              sourceProposedPlanId: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.sourceProposedPlanId
+                : null,
+              assistantMessageId: event.payload.assistantMessageId ?? null,
+              state: event.payload.state,
+              requestedAt:
+                event.payload.requestedAt ??
+                (Option.isSome(pendingTurnStart)
+                  ? pendingTurnStart.value.requestedAt
+                  : event.occurredAt),
+              startedAt:
+                event.payload.startedAt !== undefined
+                  ? event.payload.startedAt
+                  : Option.isSome(pendingTurnStart)
+                    ? pendingTurnStart.value.requestedAt
+                    : event.occurredAt,
+              completedAt:
+                event.payload.completedAt !== undefined
+                  ? event.payload.completedAt
+                  : event.payload.state === "running"
+                    ? null
+                    : event.occurredAt,
+              checkpointTurnCount: null,
+              checkpointRef: null,
+              checkpointStatus: null,
+              checkpointFiles: [],
+            });
+          }
+
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+        }
+
         case "thread.turn-diff-completed": {
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
           });
-          const nextState = event.payload.status === "error" ? "error" : "completed";
+          const checkpointState = event.payload.status === "error" ? "error" : "completed";
           yield* projectionTurnRepository.clearCheckpointTurnConflict({
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
@@ -1169,14 +1253,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               assistantMessageId: event.payload.assistantMessageId,
-              state: nextState,
+              state:
+                existingTurn.value.state === "running" || existingTurn.value.state === "pending"
+                  ? checkpointState
+                  : existingTurn.value.state,
               checkpointTurnCount: event.payload.checkpointTurnCount,
               checkpointRef: event.payload.checkpointRef,
               checkpointStatus: event.payload.status,
               checkpointFiles: event.payload.files,
               startedAt: existingTurn.value.startedAt ?? event.payload.completedAt,
               requestedAt: existingTurn.value.requestedAt ?? event.payload.completedAt,
-              completedAt: event.payload.completedAt,
+              completedAt: existingTurn.value.completedAt ?? event.payload.completedAt,
             });
             return;
           }
@@ -1187,7 +1274,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             sourceProposedPlanThreadId: null,
             sourceProposedPlanId: null,
             assistantMessageId: event.payload.assistantMessageId,
-            state: nextState,
+            state: checkpointState,
             requestedAt: event.payload.completedAt,
             startedAt: event.payload.completedAt,
             completedAt: event.payload.completedAt,

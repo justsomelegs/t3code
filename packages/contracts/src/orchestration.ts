@@ -274,6 +274,9 @@ export type OrchestrationCheckpointFile = typeof OrchestrationCheckpointFile.Typ
 export const OrchestrationCheckpointStatus = Schema.Literals(["ready", "missing", "error"]);
 export type OrchestrationCheckpointStatus = typeof OrchestrationCheckpointStatus.Type;
 
+export const OrchestrationTurnDiffSource = Schema.Literals(["checkpoint", "legacy-provider-diff"]);
+export type OrchestrationTurnDiffSource = typeof OrchestrationTurnDiffSource.Type;
+
 export const OrchestrationCheckpointSummary = Schema.Struct({
   turnId: TurnId,
   checkpointTurnCount: NonNegativeInt,
@@ -282,6 +285,9 @@ export const OrchestrationCheckpointSummary = Schema.Struct({
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
+  source: Schema.optional(OrchestrationTurnDiffSource),
+  isRevertable: Schema.optional(Schema.Boolean),
+  isFullDiffAvailable: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationCheckpointSummary = typeof OrchestrationCheckpointSummary.Type;
 
@@ -312,6 +318,9 @@ const OrchestrationLatestTurnState = Schema.Literals([
   "error",
 ]);
 export type OrchestrationLatestTurnState = typeof OrchestrationLatestTurnState.Type;
+
+export const OrchestrationTurnLifecycleState = OrchestrationLatestTurnState;
+export type OrchestrationTurnLifecycleState = typeof OrchestrationTurnLifecycleState.Type;
 
 export const OrchestrationLatestTurn = Schema.Struct({
   turnId: TurnId,
@@ -729,6 +738,19 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTurnStateSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.state.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnId: TurnId,
+  state: OrchestrationTurnLifecycleState,
+  requestedAt: Schema.optional(IsoDateTime),
+  startedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  completedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  assistantMessageId: Schema.optional(Schema.NullOr(MessageId)),
+  createdAt: IsoDateTime,
+});
+
 const ThreadActivityAppendCommand = Schema.Struct({
   type: Schema.Literal("thread.activity.append"),
   commandId: CommandId,
@@ -751,6 +773,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
+  ThreadTurnStateSetCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
 ]);
@@ -784,6 +807,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.session-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
+  "thread.turn-state-set",
   "thread.activity-appended",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
@@ -954,6 +978,16 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   completedAt: IsoDateTime,
 });
 
+export const ThreadTurnStateSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  state: OrchestrationTurnLifecycleState,
+  requestedAt: Schema.optional(IsoDateTime),
+  startedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  completedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  assistantMessageId: Schema.optional(Schema.NullOr(MessageId)),
+});
+
 export const ThreadActivityAppendedPayload = Schema.Struct({
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
@@ -1085,6 +1119,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-diff-completed"),
     payload: ThreadTurnDiffCompletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-state-set"),
+    payload: ThreadTurnStateSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

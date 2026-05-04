@@ -646,14 +646,16 @@ function AssistantChangedFilesSectionInner({
           >
             {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
           </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            onClick={() => onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)}
-          >
-            View diff
-          </Button>
+          {turnSummary.isFullDiffAvailable !== false && (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)}
+            >
+              View diff
+            </Button>
+          )}
         </div>
       </div>
       <ChangedFilesTree

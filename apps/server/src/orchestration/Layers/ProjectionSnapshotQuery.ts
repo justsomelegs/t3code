@@ -136,6 +136,28 @@ function maxIso(left: string | null, right: string): string {
   return left > right ? left : right;
 }
 
+function mapCheckpointSummary(
+  row: Schema.Schema.Type<typeof ProjectionCheckpointDbRowSchema>,
+): OrchestrationCheckpointSummary {
+  const source = row.checkpointRef.startsWith("provider-diff:")
+    ? "legacy-provider-diff"
+    : "checkpoint";
+  const isRealCheckpoint =
+    source === "checkpoint" && row.checkpointRef.startsWith("refs/t3/checkpoints/");
+  return {
+    turnId: row.turnId,
+    checkpointTurnCount: row.checkpointTurnCount,
+    checkpointRef: row.checkpointRef,
+    status: row.status,
+    files: row.files,
+    assistantMessageId: row.assistantMessageId,
+    completedAt: row.completedAt,
+    source,
+    isRevertable: isRealCheckpoint,
+    isFullDiffAvailable: isRealCheckpoint,
+  };
+}
+
 function computeSnapshotSequence(
   stateRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionStateDbRowSchema>>,
 ): number {
@@ -899,15 +921,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               for (const row of checkpointRows) {
                 updatedAt = maxIso(updatedAt, row.completedAt);
                 const threadCheckpoints = checkpointsByThread.get(row.threadId) ?? [];
-                threadCheckpoints.push({
-                  turnId: row.turnId,
-                  checkpointTurnCount: row.checkpointTurnCount,
-                  checkpointRef: row.checkpointRef,
-                  status: row.status,
-                  files: row.files,
-                  assistantMessageId: row.assistantMessageId,
-                  completedAt: row.completedAt,
-                });
+                threadCheckpoints.push(mapCheckpointSummary(row));
                 checkpointsByThread.set(row.threadId, threadCheckpoints);
               }
 
@@ -1468,17 +1482,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         projectId: threadRow.value.projectId,
         workspaceRoot: threadRow.value.workspaceRoot,
         worktreePath: threadRow.value.worktreePath,
-        checkpoints: checkpointRows.map(
-          (row): OrchestrationCheckpointSummary => ({
-            turnId: row.turnId,
-            checkpointTurnCount: row.checkpointTurnCount,
-            checkpointRef: row.checkpointRef,
-            status: row.status,
-            files: row.files,
-            assistantMessageId: row.assistantMessageId,
-            completedAt: row.completedAt,
-          }),
-        ),
+        checkpoints: checkpointRows.map(mapCheckpointSummary),
       });
     });
 
@@ -1654,15 +1658,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           }
           return activity;
         }),
-        checkpoints: checkpointRows.map((row) => ({
-          turnId: row.turnId,
-          checkpointTurnCount: row.checkpointTurnCount,
-          checkpointRef: row.checkpointRef,
-          status: row.status,
-          files: row.files,
-          assistantMessageId: row.assistantMessageId,
-          completedAt: row.completedAt,
-        })),
+        checkpoints: checkpointRows.map(mapCheckpointSummary),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
       };
 
