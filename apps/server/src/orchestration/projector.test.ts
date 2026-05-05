@@ -383,6 +383,111 @@ describe("orchestration projector", () => {
     expect(thread?.checkpoints.map((checkpoint) => checkpoint.turnId)).toEqual(["turn-1"]);
   });
 
+  it("marks matching latest turn checkpoint ready when its diff completes", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const model = createEmptyReadModel(createdAt);
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5.3-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const afterTurnRunning = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.turn-state-set",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T08:00:01.000Z",
+          commandId: "cmd-turn-running",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            state: "running",
+            requestedAt: "2026-02-23T08:00:01.000Z",
+            startedAt: "2026-02-23T08:00:01.000Z",
+            completedAt: null,
+          },
+        }),
+      ),
+    );
+
+    const afterCaptureStarted = await Effect.runPromise(
+      projectEvent(
+        afterTurnRunning,
+        makeEvent({
+          sequence: 3,
+          type: "thread.turn-checkpoint-capture-started",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T08:00:02.000Z",
+          commandId: "cmd-capture-start",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+        }),
+      ),
+    );
+
+    const afterDiffCompleted = await Effect.runPromise(
+      projectEvent(
+        afterCaptureStarted,
+        makeEvent({
+          sequence: 4,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T08:00:03.000Z",
+          commandId: "cmd-turn-diff",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/t3/checkpoints/thread-1/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: "assistant-msg-1",
+            completedAt: "2026-02-23T08:00:03.000Z",
+          },
+        }),
+      ),
+    );
+
+    const latestTurn = afterDiffCompleted.threads[0]?.latestTurn;
+    expect(latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "completed",
+      checkpointState: "ready",
+      assistantMessageId: "assistant-msg-1",
+    });
+  });
+
   it("updates canonical thread runtime mode from thread.runtime-mode-set", async () => {
     const createdAt = "2026-02-23T08:00:00.000Z";
     const updatedAt = "2026-02-23T08:00:05.000Z";

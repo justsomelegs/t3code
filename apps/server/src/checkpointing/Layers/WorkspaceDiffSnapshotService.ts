@@ -1,6 +1,7 @@
-import { Effect, Layer, Ref } from "effect";
+import { Deferred, Effect, Layer, Ref } from "effect";
 
 import { normalizeUnifiedDiffToTurnDiffFiles } from "../Diffs.ts";
+import type { CheckpointStoreError } from "../Errors.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import {
   WorkspaceDiffSnapshotService,
@@ -11,7 +12,12 @@ import {
 
 interface CacheEntry {
   readonly expiresAt: number;
-  readonly promise: Promise<WorkspaceDiffSnapshotResult>;
+  readonly deferred: Deferred.Deferred<WorkspaceDiffSnapshotResult, CheckpointStoreError>;
+}
+
+interface CacheHit {
+  readonly deferred: Deferred.Deferred<WorkspaceDiffSnapshotResult, CheckpointStoreError>;
+  readonly isOwner: boolean;
 }
 
 const CACHE_TTL_MS = 750;
@@ -33,31 +39,38 @@ const make = Effect.gen(function* () {
         stableScopeKey(input.scope),
       ].join("\0");
       const now = Date.now();
-      const promise = yield* Ref.modify(cacheRef, (previous) => {
-        const existing = previous.get(key);
-        if (existing && existing.expiresAt > now) {
-          return [existing.promise, previous] as const;
-        }
-
-        const promise = Effect.runPromise(
-          checkpointStore.diffCheckpointToWorkspace(input).pipe(
-            Effect.map((result) => ({
-              files: normalizeUnifiedDiffToTurnDiffFiles(result.diff),
-              truncated: result.truncated,
-            })),
-          ),
-        );
-
-        const next = new Map(previous);
-        for (const [entryKey, entry] of next) {
-          if (entry.expiresAt <= now) {
-            next.delete(entryKey);
+      const deferred = yield* Deferred.make<WorkspaceDiffSnapshotResult, CheckpointStoreError>();
+      const cacheHit = yield* Ref.modify(
+        cacheRef,
+        (previous): readonly [CacheHit, Map<string, CacheEntry>] => {
+          const existing = previous.get(key);
+          if (existing && existing.expiresAt > now) {
+            return [{ deferred: existing.deferred, isOwner: false }, previous] as const;
           }
-        }
-        next.set(key, { expiresAt: now + CACHE_TTL_MS, promise });
-        return [promise, next] as const;
-      });
-      return yield* Effect.promise(() => promise);
+
+          const next = new Map(previous);
+          for (const [entryKey, entry] of next) {
+            if (entry.expiresAt <= now) {
+              next.delete(entryKey);
+            }
+          }
+          next.set(key, { expiresAt: now + CACHE_TTL_MS, deferred });
+          return [{ deferred, isOwner: true }, next] as const;
+        },
+      );
+
+      if (cacheHit.isOwner) {
+        const exit = yield* checkpointStore.diffCheckpointToWorkspace(input).pipe(
+          Effect.map((result) => ({
+            files: normalizeUnifiedDiffToTurnDiffFiles(result.diff),
+            truncated: result.truncated,
+          })),
+          Effect.exit,
+        );
+        yield* Deferred.done(cacheHit.deferred, exit);
+      }
+
+      return yield* Deferred.await(cacheHit.deferred);
     });
 
   return { getLiveTurnDiff } satisfies WorkspaceDiffSnapshotServiceShape;

@@ -12,6 +12,7 @@ import { Cause, Effect, Layer, Option, Ref, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { parseTurnDiffFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
+import { isRealCheckpointRef } from "../../checkpointing/CheckpointRefs.ts";
 import {
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
@@ -42,8 +43,6 @@ function toTurnId(value: string | undefined): TurnId | null {
   return value === undefined ? null : TurnId.make(String(value));
 }
 
-const isRealCheckpointRef = (checkpointRef: string) =>
-  checkpointRef.startsWith("refs/t3/checkpoints/");
 const LIVE_DIFF_STATUS_REFRESH_THROTTLE_MS = 750;
 
 function sameId(left: string | null | undefined, right: string | null | undefined): boolean {

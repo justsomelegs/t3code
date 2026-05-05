@@ -34,11 +34,12 @@ export function parseTurnDiffFilesFromUnifiedDiff(
 
 function normalizeDiffPath(raw: string | undefined): string {
   if (!raw) return "";
-  if (raw === "/dev/null") return "";
-  if (raw.startsWith("a/") || raw.startsWith("b/")) {
-    return raw.slice(2);
+  const trimmed = raw.trimEnd();
+  if (trimmed === "/dev/null") return "";
+  if (trimmed.startsWith("a/") || trimmed.startsWith("b/")) {
+    return trimmed.slice(2);
   }
-  return raw;
+  return trimmed;
 }
 
 function splitUnifiedDiffByFile(diff: string): string[] {
@@ -67,6 +68,22 @@ function unquoteDiffPath(raw: string): string {
     return raw.slice(1, -1).replace(/\\"/g, '"');
   }
   return raw;
+}
+
+function parsePrefixedPathLine(block: string, prefix: string): string {
+  const line = block
+    .split("\n")
+    .find((entry) => entry.startsWith(prefix))
+    ?.slice(prefix.length);
+  return normalizeDiffPath(unquoteDiffPath(line?.trimEnd() ?? ""));
+}
+
+function parseRenamePathLine(block: string, prefix: string): string {
+  const line = block
+    .split("\n")
+    .find((entry) => entry.startsWith(prefix))
+    ?.slice(prefix.length);
+  return normalizeDiffPath(unquoteDiffPath(line?.trimEnd() ?? ""));
 }
 
 function readDiffPathToken(input: string): { token: string; rest: string } | null {
@@ -100,6 +117,16 @@ function readDiffPathToken(input: string): { token: string; rest: string } | nul
 }
 
 function parseDiffGitHeader(block: string): { path: string; previousPath?: string } {
+  const previousMarkerPath =
+    parsePrefixedPathLine(block, "--- ") || parseRenamePathLine(block, "rename from ");
+  const markerPath =
+    parsePrefixedPathLine(block, "+++ ") || parseRenamePathLine(block, "rename to ");
+  if (markerPath || previousMarkerPath) {
+    const path = markerPath || previousMarkerPath;
+    const previousPath = previousMarkerPath || undefined;
+    return previousPath && previousPath !== path ? { path, previousPath } : { path };
+  }
+
   const firstLine = block.split(/\n/, 1)[0] ?? "";
   const remainder = firstLine.startsWith("diff --git ")
     ? firstLine.slice("diff --git ".length)

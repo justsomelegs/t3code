@@ -14,10 +14,9 @@ import { checkpointRefForThreadTurn } from "../Utils.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { TurnDiffService, type TurnDiffServiceShape } from "../Services/TurnDiffService.ts";
 import { WorkspaceDiffSnapshotService } from "../Services/WorkspaceDiffSnapshotService.ts";
+import { isRealCheckpointRef } from "../CheckpointRefs.ts";
 
 const isTurnDiffViewResult = Schema.is(OrchestrationGetTurnDiffViewResult);
-const isRealCheckpointRef = (checkpointRef: string) =>
-  checkpointRef.startsWith("refs/t3/checkpoints/");
 
 function makeRevision(input: {
   readonly mode: "completed" | "live";

@@ -16,11 +16,25 @@ import { Effect, Layer, FileSystem, Path } from "effect";
 import { CheckpointInvariantError } from "../Errors.ts";
 import { VcsProcessExitError } from "@t3tools/contracts";
 import { VcsDriverRegistry } from "../../vcs/VcsDriverRegistry.ts";
-import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
+import {
+  CheckpointStore,
+  type CheckpointStoreShape,
+  type DiffCheckpointToWorkspaceInput,
+} from "../Services/CheckpointStore.ts";
 import { CheckpointRef } from "@t3tools/contracts";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 const CHECKPOINT_WORKSPACE_DIFF_MAX_OUTPUT_BYTES = 5_000_000;
+
+function liveDiffScopePathspec(input: DiffCheckpointToWorkspaceInput): ReadonlyArray<string> {
+  if (input.scope.type === "workspace") {
+    return ["."];
+  }
+  if (input.scope.type === "directory" && !input.scope.path.endsWith("/")) {
+    return [`${input.scope.path}/`];
+  }
+  return [input.scope.path];
+}
 
 const makeCheckpointStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -316,10 +330,11 @@ const makeCheckpointStore = Effect.gen(function* () {
           });
         }
 
+        const scopedPathspec = liveDiffScopePathspec(input);
         yield* vcs.execute({
           operation,
           cwd: input.cwd,
-          args: ["add", "-A", "--", "."],
+          args: ["add", "-A", "--", ...scopedPathspec],
           env: diffEnv,
         });
 
@@ -340,15 +355,7 @@ const makeCheckpointStore = Effect.gen(function* () {
           });
         }
 
-        const pathspec =
-          input.scope.type === "workspace"
-            ? []
-            : [
-                "--",
-                input.scope.type === "directory" && !input.scope.path.endsWith("/")
-                  ? `${input.scope.path}/`
-                  : input.scope.path,
-              ];
+        const diffPathspec = input.scope.type === "workspace" ? [] : ["--", ...scopedPathspec];
         const result = yield* vcs.execute({
           operation,
           cwd: input.cwd,
@@ -360,7 +367,7 @@ const makeCheckpointStore = Effect.gen(function* () {
             ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
             fromCommitOid,
             workspaceTreeOid,
-            ...pathspec,
+            ...diffPathspec,
           ],
           maxOutputBytes: CHECKPOINT_WORKSPACE_DIFF_MAX_OUTPUT_BYTES,
           truncateOutputAtMaxBytes: true,

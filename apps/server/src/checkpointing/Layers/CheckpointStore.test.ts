@@ -261,5 +261,41 @@ it.layer(TestLayer)("CheckpointStoreLive", (it) => {
         expect(result.diff).not.toContain("other.txt");
       }),
     );
+
+    it.effect("keeps scoped live diffs limited while preserving deletes and untracked files", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* fileSystem.makeDirectory(path.join(tmp, "src"));
+        yield* writeTextFile(path.join(tmp, "src", "tracked.ts"), "old\n");
+        yield* git(tmp, ["add", "src/tracked.ts"]);
+        yield* git(tmp, ["commit", "-m", "add tracked src file"]);
+        const checkpointStore = yield* CheckpointStore;
+        const threadId = ThreadId.make("thread-live-diff-directory-scope");
+        const fromCheckpointRef = checkpointRefForThreadTurn(threadId, 0);
+
+        yield* checkpointStore.captureCheckpoint({
+          cwd: tmp,
+          checkpointRef: fromCheckpointRef,
+        });
+
+        yield* writeTextFile(path.join(tmp, "src", "new.ts"), "new\n");
+        yield* fileSystem.remove(path.join(tmp, "src", "tracked.ts"));
+        yield* writeTextFile(path.join(tmp, "outside.ts"), "outside\n");
+
+        const result = yield* checkpointStore.diffCheckpointToWorkspace({
+          cwd: tmp,
+          fromCheckpointRef,
+          ignoreWhitespace: false,
+          scope: { type: "directory", path: "src" },
+        });
+
+        expect(result.diff).toContain("diff --git a/src/new.ts b/src/new.ts");
+        expect(result.diff).toContain("diff --git a/src/tracked.ts b/src/tracked.ts");
+        expect(result.diff).toContain("deleted file mode");
+        expect(result.diff).not.toContain("outside.ts");
+      }),
+    );
   });
 });

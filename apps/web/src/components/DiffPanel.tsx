@@ -297,6 +297,12 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     selectedTurn.checkpointTurnCount === undefined &&
     activeThread?.latestTurn?.turnId === selectedTurn.turnId;
   const selectedCurrentTurn = selectedRunningTurn || selectedCheckpointPendingTurn;
+  const selectedCompletedTurn = selectedTurn && !selectedCurrentTurn ? selectedTurn : null;
+  const checkpointCapturePending =
+    selectedCheckpointPendingTurn &&
+    (activeThread?.latestTurn?.checkpointState === undefined ||
+      activeThread.latestTurn.checkpointState === "not-started" ||
+      activeThread.latestTurn.checkpointState === "capturing");
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
@@ -353,7 +359,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
       cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
-      enabled: isGitRepo && !selectedCurrentTurn,
+      enabled: isGitRepo && !selectedTurn,
     }),
   );
   const liveDiffRevisionKey = useMemo(() => {
@@ -374,9 +380,20 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       enabled: isGitRepo && selectedRunningTurn && diffOpen,
     }),
   });
-  const selectedTurnCheckpointDiff = selectedTurn
-    ? activeCheckpointDiffQuery.data?.diff
-    : undefined;
+  const completedTurnDiffQuery = useQuery({
+    ...turnDiffViewQueryOptions({
+      environmentId: activeThread?.environmentId ?? null,
+      threadId: activeThreadId,
+      turnId: selectedCompletedTurn?.turnId ?? null,
+      mode: "completed",
+      ignoreWhitespace: diffIgnoreWhitespace,
+      scope: selectedFilePath ? { type: "file", path: selectedFilePath } : { type: "workspace" },
+      revisionKey: selectedCompletedTurn
+        ? `${selectedCompletedTurn.turnId}:${selectedCompletedTurn.checkpointRef ?? ""}`
+        : null,
+      enabled: isGitRepo && !!selectedCompletedTurn && diffOpen,
+    }),
+  });
   const conversationCheckpointDiff = selectedTurn
     ? undefined
     : activeCheckpointDiffQuery.data?.diff;
@@ -386,11 +403,15 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       ? liveTurnDiffQuery.error.message
       : selectedRunningTurn && liveTurnDiffQuery.error
         ? "Failed to load live turn diff."
-        : activeCheckpointDiffQuery.error instanceof Error
-          ? activeCheckpointDiffQuery.error.message
-          : activeCheckpointDiffQuery.error
-            ? "Failed to load checkpoint diff."
-            : null;
+        : selectedCompletedTurn && completedTurnDiffQuery.error instanceof Error
+          ? completedTurnDiffQuery.error.message
+          : selectedCompletedTurn && completedTurnDiffQuery.error
+            ? "Failed to load turn diff."
+            : activeCheckpointDiffQuery.error instanceof Error
+              ? activeCheckpointDiffQuery.error.message
+              : activeCheckpointDiffQuery.error
+                ? "Failed to load checkpoint diff."
+                : null;
 
   useEffect(() => {
     const files = liveTurnDiffQuery.data?.files;
@@ -410,22 +431,31 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       ? lastLiveTurnFiles.files
       : null
     : null;
-  const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
+  const completedTurnFiles = selectedCompletedTurn
+    ? (completedTurnDiffQuery.data?.files ?? null)
+    : null;
+  const activeStructuredFiles = activeLiveFiles ?? completedTurnFiles;
+  const selectedPatch = selectedTurn ? undefined : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
-  const hasResolvedLiveFiles = activeLiveFiles !== null;
+  const hasResolvedStructuredFiles = activeStructuredFiles !== null;
   const hasNoNetChanges =
-    activeLiveFiles !== null
-      ? activeLiveFiles.length === 0
+    activeStructuredFiles !== null
+      ? activeStructuredFiles.length === 0
       : hasResolvedPatch && selectedPatch.trim().length === 0;
-  const isLoadingDiff = selectedRunningTurn
-    ? liveTurnDiffQuery.isLoading || (liveTurnDiffQuery.isFetching && !hasResolvedLiveFiles)
-    : isLoadingCheckpointDiff;
+  const isLoadingDiff = checkpointCapturePending
+    ? true
+    : selectedRunningTurn
+      ? liveTurnDiffQuery.isLoading || (liveTurnDiffQuery.isFetching && !hasResolvedStructuredFiles)
+      : selectedCompletedTurn
+        ? completedTurnDiffQuery.isLoading ||
+          (completedTurnDiffQuery.isFetching && !hasResolvedStructuredFiles)
+        : isLoadingCheckpointDiff;
   const renderablePatch = useMemo(
     () =>
-      activeLiveFiles !== null
+      activeStructuredFiles !== null
         ? null
         : getRenderablePatch(selectedPatch, `diff-panel:${resolvedTheme}`),
-    [activeLiveFiles, resolvedTheme, selectedPatch],
+    [activeStructuredFiles, resolvedTheme, selectedPatch],
   );
   const checkpointRenderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
@@ -438,20 +468,20 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       }),
     );
   }, [renderablePatch]);
-  const liveRenderableFiles = useMemo(() => {
-    if (activeLiveFiles === null) {
+  const structuredRenderableFiles = useMemo(() => {
+    if (activeStructuredFiles === null) {
       return [];
     }
-    return activeLiveFiles.flatMap((file) => {
+    return activeStructuredFiles.flatMap((file) => {
       const renderable = getRenderablePatch(file.patch, `diff-panel:${resolvedTheme}:${file.hash}`);
       return renderable?.kind === "files" ? renderable.files : [];
     });
-  }, [activeLiveFiles, resolvedTheme]);
+  }, [activeStructuredFiles, resolvedTheme]);
   const renderableFiles =
-    activeLiveFiles !== null ? liveRenderableFiles : checkpointRenderableFiles;
+    activeStructuredFiles !== null ? structuredRenderableFiles : checkpointRenderableFiles;
   const hasRenderableFileDiffs = renderableFiles.length > 0;
   const rawRenderablePatch =
-    activeLiveFiles === null && renderablePatch?.kind === "raw" ? renderablePatch : null;
+    activeStructuredFiles === null && renderablePatch?.kind === "raw" ? renderablePatch : null;
   const hasRenderableContent = hasRenderableFileDiffs || rawRenderablePatch !== null;
 
   useEffect(() => {
@@ -765,7 +795,11 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
               isLoadingDiff ? (
                 <DiffPanelLoadingState
                   label={
-                    selectedRunningTurn ? "Loading live diff..." : "Loading checkpoint diff..."
+                    checkpointCapturePending
+                      ? "Capturing checkpoint..."
+                      : selectedRunningTurn
+                        ? "Loading live diff..."
+                        : "Loading checkpoint diff..."
                   }
                 />
               ) : (

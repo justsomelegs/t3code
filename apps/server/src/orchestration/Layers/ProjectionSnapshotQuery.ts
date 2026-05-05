@@ -43,6 +43,7 @@ import { ProjectionThreadProposedPlan } from "../../persistence/Services/Project
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
 import { RepositoryIdentityResolver } from "../../project/Services/RepositoryIdentityResolver.ts";
+import { classifyCheckpointRef } from "../../checkpointing/CheckpointRefs.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   ProjectionSnapshotQuery,
@@ -141,11 +142,6 @@ function maxIso(left: string | null, right: string): string {
 function mapCheckpointSummary(
   row: Schema.Schema.Type<typeof ProjectionCheckpointDbRowSchema>,
 ): OrchestrationCheckpointSummary {
-  const source = row.checkpointRef.startsWith("provider-diff:")
-    ? "legacy-provider-diff"
-    : "checkpoint";
-  const isRealCheckpoint =
-    source === "checkpoint" && row.checkpointRef.startsWith("refs/t3/checkpoints/");
   return {
     turnId: row.turnId,
     checkpointTurnCount: row.checkpointTurnCount,
@@ -154,9 +150,7 @@ function mapCheckpointSummary(
     files: row.files,
     assistantMessageId: row.assistantMessageId,
     completedAt: row.completedAt,
-    source,
-    isRevertable: isRealCheckpoint,
-    isFullDiffAvailable: isRealCheckpoint,
+    ...classifyCheckpointRef(row.checkpointRef),
     checkpointState: row.checkpointState,
   };
 }

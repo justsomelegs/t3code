@@ -1,12 +1,12 @@
 import type {
-  CheckpointRef,
   MessageId,
-  OrchestrationCheckpointSummary,
   OrchestrationLatestTurn,
   OrchestrationTurnCheckpointState,
   OrchestrationTurnLifecycleState,
   TurnId,
 } from "@t3tools/contracts";
+
+export { classifyCheckpointRef, isRealCheckpointRef } from "../checkpointing/CheckpointRefs.ts";
 
 interface TurnStateSetProjectionPayload {
   readonly turnId: TurnId;
@@ -15,19 +15,6 @@ interface TurnStateSetProjectionPayload {
   readonly startedAt: string | null | undefined;
   readonly completedAt: string | null | undefined;
   readonly assistantMessageId: MessageId | null | undefined;
-}
-
-export function classifyCheckpointRef(
-  checkpointRef: CheckpointRef | string,
-): Pick<OrchestrationCheckpointSummary, "source" | "isRevertable" | "isFullDiffAvailable"> {
-  const source = checkpointRef.startsWith("provider-diff:") ? "legacy-provider-diff" : "checkpoint";
-  const isRealCheckpoint =
-    source === "checkpoint" && checkpointRef.startsWith("refs/t3/checkpoints/");
-  return {
-    source,
-    isRevertable: isRealCheckpoint,
-    isFullDiffAvailable: isRealCheckpoint,
-  };
 }
 
 export function checkpointStatusToLatestTurnState(

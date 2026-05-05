@@ -8,6 +8,7 @@ import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
+import { isRealCheckpointRef } from "../CheckpointRefs.ts";
 import { checkpointRefForThreadTurn } from "../Utils.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import {
@@ -16,8 +17,6 @@ import {
 } from "../Services/CheckpointDiffQuery.ts";
 
 const isTurnDiffResult = Schema.is(OrchestrationGetTurnDiffResult);
-const isRealCheckpointRef = (checkpointRef: string) =>
-  checkpointRef.startsWith("refs/t3/checkpoints/");
 
 const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;

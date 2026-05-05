@@ -551,15 +551,27 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
-            latestTurn: thread.latestTurn ?? {
-              turnId: payload.turnId,
-              state: checkpointStatusToLatestTurnState(payload.status),
-              requestedAt: payload.completedAt,
-              startedAt: payload.completedAt,
-              completedAt: payload.completedAt,
-              assistantMessageId: payload.assistantMessageId,
-              checkpointState: checkpointStatusToCaptureState(payload.status),
-            },
+            latestTurn:
+              thread.latestTurn?.turnId === payload.turnId
+                ? {
+                    ...thread.latestTurn,
+                    state:
+                      thread.latestTurn.state === "running"
+                        ? checkpointStatusToLatestTurnState(payload.status)
+                        : thread.latestTurn.state,
+                    completedAt: thread.latestTurn.completedAt ?? payload.completedAt,
+                    assistantMessageId: payload.assistantMessageId,
+                    checkpointState: checkpointStatusToCaptureState(payload.status),
+                  }
+                : (thread.latestTurn ?? {
+                    turnId: payload.turnId,
+                    state: checkpointStatusToLatestTurnState(payload.status),
+                    requestedAt: payload.completedAt,
+                    startedAt: payload.completedAt,
+                    completedAt: payload.completedAt,
+                    assistantMessageId: payload.assistantMessageId,
+                    checkpointState: checkpointStatusToCaptureState(payload.status),
+                  }),
             updatedAt: event.occurredAt,
           }),
         };

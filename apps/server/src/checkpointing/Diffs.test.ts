@@ -132,4 +132,71 @@ describe("normalizeUnifiedDiffToTurnDiffFiles", () => {
       },
     ]);
   });
+
+  it("keeps patch content for unquoted paths with spaces", () => {
+    const diff = [
+      "diff --git a/foo bar.txt b/foo bar.txt",
+      "index 1111111..2222222 100644",
+      "--- a/foo bar.txt",
+      "+++ b/foo bar.txt",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+
+    expect(normalizeUnifiedDiffToTurnDiffFiles(diff)).toMatchObject([
+      {
+        path: "foo bar.txt",
+        status: "modified",
+        patch: expect.stringContaining("diff --git a/foo bar.txt b/foo bar.txt"),
+        additions: 1,
+        deletions: 1,
+      },
+    ]);
+  });
+
+  it("keeps patch content for deleted paths with spaces", () => {
+    const diff = [
+      "diff --git a/old file.txt b/old file.txt",
+      "deleted file mode 100644",
+      "index 1111111..0000000",
+      "--- a/old file.txt",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-old",
+      "",
+    ].join("\n");
+
+    expect(normalizeUnifiedDiffToTurnDiffFiles(diff)).toMatchObject([
+      {
+        path: "old file.txt",
+        status: "deleted",
+        patch: expect.stringContaining("deleted file mode 100644"),
+        additions: 0,
+        deletions: 1,
+      },
+    ]);
+  });
+
+  it("keeps patch content for rename-only paths with spaces", () => {
+    const diff = [
+      "diff --git a/old name.txt b/new name.txt",
+      "similarity index 100%",
+      "rename from old name.txt",
+      "rename to new name.txt",
+      "",
+    ].join("\n");
+
+    expect(normalizeUnifiedDiffToTurnDiffFiles(diff)).toMatchObject([
+      {
+        path: "new name.txt",
+        previousPath: "old name.txt",
+        status: "renamed",
+        patch: expect.stringContaining("rename to new name.txt"),
+        additions: 0,
+        deletions: 0,
+      },
+    ]);
+  });
 });
