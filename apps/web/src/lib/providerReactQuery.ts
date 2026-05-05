@@ -2,7 +2,9 @@ import {
   type EnvironmentId,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
+  OrchestrationGetTurnDiffViewInput,
   ThreadId,
+  type TurnId,
 } from "@t3tools/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
@@ -18,6 +20,16 @@ interface CheckpointDiffQueryInput {
   enabled?: boolean;
 }
 
+interface TurnDiffViewQueryInput {
+  environmentId: EnvironmentId | null;
+  threadId: ThreadId | null;
+  turnId: TurnId | null;
+  mode: "completed" | "live";
+  ignoreWhitespace: boolean;
+  paths?: string[] | null;
+  enabled?: boolean;
+}
+
 export const providerQueryKeys = {
   all: ["providers"] as const,
   checkpointDiff: (input: CheckpointDiffQueryInput) =>
@@ -30,6 +42,17 @@ export const providerQueryKeys = {
       input.toTurnCount,
       input.ignoreWhitespace,
       input.cacheScope ?? null,
+    ] as const,
+  turnDiffView: (input: TurnDiffViewQueryInput) =>
+    [
+      "providers",
+      "turnDiffView",
+      input.environmentId ?? null,
+      input.threadId,
+      input.turnId,
+      input.mode,
+      input.ignoreWhitespace,
+      input.paths?.join("\0") ?? null,
     ] as const,
 };
 
@@ -48,6 +71,16 @@ function decodeCheckpointDiffRequest(input: CheckpointDiffQueryInput) {
     toTurnCount: input.toTurnCount,
     ignoreWhitespace: input.ignoreWhitespace,
   }).pipe(Option.map((fields) => ({ kind: "turnDiff" as const, input: fields })));
+}
+
+function decodeTurnDiffViewRequest(input: TurnDiffViewQueryInput) {
+  return Schema.decodeUnknownOption(OrchestrationGetTurnDiffViewInput)({
+    threadId: input.threadId,
+    turnId: input.turnId,
+    mode: input.mode,
+    ignoreWhitespace: input.ignoreWhitespace,
+    ...(input.paths && input.paths.length > 0 ? { paths: input.paths } : {}),
+  });
 }
 
 function asCheckpointErrorMessage(error: unknown): string {
@@ -121,6 +154,41 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
       !!input.threadId &&
       decodedRequest._tag === "Some",
     staleTime: Infinity,
+    retry: (failureCount, error) => {
+      if (isCheckpointTemporarilyUnavailable(error)) {
+        return failureCount < 12;
+      }
+      return failureCount < 3;
+    },
+    retryDelay: (attempt, error) =>
+      isCheckpointTemporarilyUnavailable(error)
+        ? Math.min(5_000, 250 * 2 ** (attempt - 1))
+        : Math.min(1_000, 100 * 2 ** (attempt - 1)),
+  });
+}
+
+export function turnDiffViewQueryOptions(input: TurnDiffViewQueryInput) {
+  const decodedRequest = decodeTurnDiffViewRequest(input);
+
+  return queryOptions({
+    queryKey: providerQueryKeys.turnDiffView(input),
+    queryFn: async () => {
+      if (!input.environmentId || !input.threadId || decodedRequest._tag === "None") {
+        throw new Error("Turn diff view is unavailable.");
+      }
+      const api = ensureEnvironmentApi(input.environmentId);
+      try {
+        return await api.orchestration.getTurnDiffView(decodedRequest.value);
+      } catch (error) {
+        throw new Error(normalizeCheckpointErrorMessage(error), { cause: error });
+      }
+    },
+    enabled:
+      (input.enabled ?? true) &&
+      !!input.environmentId &&
+      !!input.threadId &&
+      decodedRequest._tag === "Some",
+    staleTime: input.mode === "live" ? 0 : Infinity,
     retry: (failureCount, error) => {
       if (isCheckpointTemporarilyUnavailable(error)) {
         return failureCount < 12;

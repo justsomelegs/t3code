@@ -35,6 +35,18 @@ export interface DiffCheckpointsInput {
   readonly ignoreWhitespace: boolean;
 }
 
+export interface DiffCheckpointToWorkspaceInput {
+  readonly cwd: string;
+  readonly fromCheckpointRef: CheckpointRef;
+  readonly ignoreWhitespace: boolean;
+  readonly paths?: ReadonlyArray<string>;
+}
+
+export interface DiffCheckpointToWorkspaceResult {
+  readonly diff: string;
+  readonly truncated: boolean;
+}
+
 export interface DeleteCheckpointRefsInput {
   readonly cwd: string;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
@@ -82,6 +94,16 @@ export interface CheckpointStoreShape {
   readonly diffCheckpoints: (
     input: DiffCheckpointsInput,
   ) => Effect.Effect<string, CheckpointStoreError>;
+
+  /**
+   * Compute patch diff between a checkpoint ref and the current workspace snapshot.
+   *
+   * Uses an isolated temporary Git index so staged, unstaged, deleted, and
+   * untracked files are read consistently without mutating the user's index.
+   */
+  readonly diffCheckpointToWorkspace: (
+    input: DiffCheckpointToWorkspaceInput,
+  ) => Effect.Effect<DiffCheckpointToWorkspaceResult, CheckpointStoreError>;
 
   /**
    * Delete the provided checkpoint refs.

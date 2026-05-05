@@ -23,7 +23,7 @@ import {
 } from "react";
 import { openInPreferredEditor } from "../editorPreferences";
 import { useGitStatus } from "~/lib/gitStatusState";
-import { checkpointDiffQueryOptions } from "~/lib/providerReactQuery";
+import { checkpointDiffQueryOptions, turnDiffViewQueryOptions } from "~/lib/providerReactQuery";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { resolvePathLinkTarget } from "../terminal-links";
@@ -37,8 +37,10 @@ import { createThreadSelectorByRef } from "../storeSelectors";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { useSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
+import { getFullDiffTurnSummaries, sortTurnDiffSummariesForDiffPanel } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
+import type { TurnDiffSummary } from "../types";
 
 type DiffRenderMode = "stacked" | "split";
 type DiffThemeType = "light" | "dark";
@@ -193,6 +195,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const [collapsedDiffFileKeys, setCollapsedDiffFileKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const [lastLiveTurnPatch, setLastLiveTurnPatch] = useState<{
+    turnId: TurnId;
+    patch: string;
+  } | null>(null);
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const turnStripRef = useRef<HTMLDivElement>(null);
   const previousDiffOpenRef = useRef(false);
@@ -225,28 +231,59 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
+  const fullDiffTurnSummaries = useMemo(
+    () => getFullDiffTurnSummaries(turnDiffSummaries),
+    [turnDiffSummaries],
+  );
   const orderedTurnDiffSummaries = useMemo(
     () =>
-      [...turnDiffSummaries].toSorted((left, right) => {
-        const leftTurnCount =
-          left.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[left.turnId] ?? 0;
-        const rightTurnCount =
-          right.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[right.turnId] ?? 0;
-        if (leftTurnCount !== rightTurnCount) {
-          return rightTurnCount - leftTurnCount;
-        }
-        return right.completedAt.localeCompare(left.completedAt);
-      }),
-    [inferredCheckpointTurnCountByTurnId, turnDiffSummaries],
+      sortTurnDiffSummariesForDiffPanel(fullDiffTurnSummaries, inferredCheckpointTurnCountByTurnId),
+    [fullDiffTurnSummaries, inferredCheckpointTurnCountByTurnId],
   );
-
   const selectedTurnId = diffSearch.diffTurnId ?? null;
   const selectedFilePath = selectedTurnId !== null ? (diffSearch.diffFilePath ?? null) : null;
+  const transientLatestTurnSummary = useMemo<TurnDiffSummary | null>(() => {
+    const latestTurn = activeThread?.latestTurn;
+    if (!latestTurn) {
+      return null;
+    }
+    if (orderedTurnDiffSummaries.some((summary) => summary.turnId === latestTurn.turnId)) {
+      return null;
+    }
+    if (latestTurn.state !== "running" && selectedTurnId !== latestTurn.turnId) {
+      return null;
+    }
+    return {
+      turnId: latestTurn.turnId,
+      completedAt: latestTurn.startedAt ?? latestTurn.requestedAt,
+      status: latestTurn.state,
+      files: [],
+      isFullDiffAvailable: true,
+      isRevertable: false,
+    } satisfies TurnDiffSummary;
+  }, [activeThread?.latestTurn, orderedTurnDiffSummaries, selectedTurnId]);
+  const displayedTurnDiffSummaries = useMemo(
+    () =>
+      transientLatestTurnSummary
+        ? [transientLatestTurnSummary, ...orderedTurnDiffSummaries]
+        : orderedTurnDiffSummaries,
+    [orderedTurnDiffSummaries, transientLatestTurnSummary],
+  );
+
   const selectedTurn =
     selectedTurnId === null
       ? undefined
-      : (orderedTurnDiffSummaries.find((summary) => summary.turnId === selectedTurnId) ??
-        orderedTurnDiffSummaries[0]);
+      : (displayedTurnDiffSummaries.find((summary) => summary.turnId === selectedTurnId) ??
+        displayedTurnDiffSummaries[0]);
+  const selectedRunningTurn =
+    !!selectedTurn &&
+    activeThread?.latestTurn?.state === "running" &&
+    selectedTurn.turnId === activeThread.latestTurn.turnId;
+  const selectedFinalizingTurn =
+    !!selectedTurn &&
+    !selectedRunningTurn &&
+    selectedTurn.checkpointTurnCount === undefined &&
+    activeThread?.latestTurn?.turnId === selectedTurn.turnId;
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
@@ -284,7 +321,9 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     [conversationCheckpointTurnCount, selectedTurn],
   );
   const activeCheckpointRange = selectedTurn
-    ? selectedCheckpointRange
+    ? selectedRunningTurn || selectedFinalizingTurn
+      ? null
+      : selectedCheckpointRange
     : conversationCheckpointRange;
   const conversationCacheScope = useMemo(() => {
     if (selectedTurn || orderedTurnDiffSummaries.length === 0) {
@@ -300,9 +339,26 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
       cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
-      enabled: isGitRepo,
+      enabled: isGitRepo && !selectedRunningTurn && !selectedFinalizingTurn,
     }),
   );
+  const liveDiffPaths = useMemo(
+    () => gitStatusQuery.data?.workingTree.files.map((file) => file.path) ?? null,
+    [gitStatusQuery.data?.workingTree.files],
+  );
+  const liveTurnDiffQuery = useQuery({
+    ...turnDiffViewQueryOptions({
+      environmentId: activeThread?.environmentId ?? null,
+      threadId: activeThreadId,
+      turnId: selectedRunningTurn ? selectedTurn.turnId : null,
+      mode: "live",
+      ignoreWhitespace: diffIgnoreWhitespace,
+      paths: liveDiffPaths,
+      enabled: isGitRepo && selectedRunningTurn && diffOpen,
+    }),
+    refetchInterval: selectedRunningTurn && diffOpen ? 1_000 : false,
+    refetchIntervalInBackground: false,
+  });
   const selectedTurnCheckpointDiff = selectedTurn
     ? activeCheckpointDiffQuery.data?.diff
     : undefined;
@@ -311,15 +367,41 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     : activeCheckpointDiffQuery.data?.diff;
   const isLoadingCheckpointDiff = activeCheckpointDiffQuery.isLoading;
   const checkpointDiffError =
-    activeCheckpointDiffQuery.error instanceof Error
-      ? activeCheckpointDiffQuery.error.message
-      : activeCheckpointDiffQuery.error
-        ? "Failed to load checkpoint diff."
-        : null;
+    selectedRunningTurn && liveTurnDiffQuery.error instanceof Error
+      ? liveTurnDiffQuery.error.message
+      : selectedRunningTurn && liveTurnDiffQuery.error
+        ? "Failed to load live turn diff."
+        : activeCheckpointDiffQuery.error instanceof Error
+          ? activeCheckpointDiffQuery.error.message
+          : activeCheckpointDiffQuery.error
+            ? "Failed to load checkpoint diff."
+            : null;
 
-  const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
+  const liveTurnDiffPatch = useMemo(() => {
+    const files = liveTurnDiffQuery.data?.files;
+    if (!files) {
+      return undefined;
+    }
+    return files.map((file) => file.patch).join("\n\n");
+  }, [liveTurnDiffQuery.data?.files]);
+  useEffect(() => {
+    if (!selectedRunningTurn || typeof liveTurnDiffPatch !== "string" || !selectedTurn) {
+      return;
+    }
+    setLastLiveTurnPatch({ turnId: selectedTurn.turnId, patch: liveTurnDiffPatch });
+  }, [liveTurnDiffPatch, selectedRunningTurn, selectedTurn]);
+  const selectedPatch = selectedRunningTurn
+    ? liveTurnDiffPatch
+    : selectedFinalizingTurn && lastLiveTurnPatch?.turnId === selectedTurn?.turnId
+      ? lastLiveTurnPatch.patch
+      : selectedTurn
+        ? selectedTurnCheckpointDiff
+        : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
+  const isLoadingDiff = selectedRunningTurn
+    ? liveTurnDiffQuery.isLoading || (liveTurnDiffQuery.isFetching && !hasResolvedPatch)
+    : isLoadingCheckpointDiff;
   const renderablePatch = useMemo(
     () => getRenderablePatch(selectedPatch, `diff-panel:${resolvedTheme}`),
     [resolvedTheme, selectedPatch],
@@ -463,7 +545,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [orderedTurnDiffSummaries, selectedTurnId, updateTurnStripScrollState]);
+  }, [displayedTurnDiffSummaries, selectedTurnId, updateTurnStripScrollState]);
 
   useEffect(() => {
     const element = turnStripRef.current;
@@ -533,7 +615,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
               <div className="text-[10px] leading-tight font-medium">All turns</div>
             </div>
           </button>
-          {orderedTurnDiffSummaries.map((summary) => (
+          {displayedTurnDiffSummaries.map((summary) => (
             <button
               key={summary.turnId}
               type="button"
@@ -552,10 +634,15 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
               >
                 <div className="flex items-center gap-1">
                   <span className="text-[10px] leading-tight font-medium">
-                    Turn{" "}
-                    {summary.checkpointTurnCount ??
-                      inferredCheckpointTurnCountByTurnId[summary.turnId] ??
-                      "?"}
+                    {summary.status === "running"
+                      ? "Current"
+                      : selectedFinalizingTurn && summary.turnId === selectedTurn?.turnId
+                        ? "Finalizing"
+                        : `Turn ${
+                            summary.checkpointTurnCount ??
+                            inferredCheckpointTurnCountByTurnId[summary.turnId] ??
+                            "?"
+                          }`}
                   </span>
                   <span className="text-[9px] leading-tight opacity-70">
                     {formatShortTimestamp(summary.completedAt, settings.timestampFormat)}
@@ -624,7 +711,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Turn diffs are unavailable because this project is not a git repository.
         </div>
-      ) : orderedTurnDiffSummaries.length === 0 ? (
+      ) : displayedTurnDiffSummaries.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           No completed turns yet.
         </div>
@@ -640,8 +727,12 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
               </div>
             )}
             {!renderablePatch ? (
-              isLoadingCheckpointDiff ? (
-                <DiffPanelLoadingState label="Loading checkpoint diff..." />
+              isLoadingDiff ? (
+                <DiffPanelLoadingState
+                  label={
+                    selectedRunningTurn ? "Loading live diff..." : "Loading checkpoint diff..."
+                  }
+                />
               ) : (
                 <div className="flex h-full items-center justify-center px-3 py-2 text-xs text-muted-foreground/70">
                   <p>

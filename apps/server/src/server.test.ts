@@ -21,6 +21,7 @@ import {
   ProviderInstanceId,
   ResolvedKeybindingRule,
   ThreadId,
+  TurnId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -62,6 +63,10 @@ import {
   CheckpointDiffQuery,
   type CheckpointDiffQueryShape,
 } from "./checkpointing/Services/CheckpointDiffQuery.ts";
+import {
+  TurnDiffService,
+  type TurnDiffServiceShape,
+} from "./checkpointing/Services/TurnDiffService.ts";
 import { GitManager, type GitManagerShape } from "./git/GitManager.ts";
 import { Keybindings, type KeybindingsShape } from "./keybindings.ts";
 import { Open, type OpenShape } from "./open.ts";
@@ -330,6 +335,7 @@ const buildAppUnderTest = (options?: {
     orchestrationEngine?: Partial<OrchestrationEngineShape>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQueryShape>;
     checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
+    turnDiffService?: Partial<TurnDiffServiceShape>;
     browserTraceCollector?: Partial<BrowserTraceCollectorShape>;
     serverLifecycleEvents?: Partial<ServerLifecycleEventsShape>;
     serverRuntimeStartup?: Partial<ServerRuntimeStartupShape>;
@@ -611,6 +617,20 @@ const buildAppUnderTest = (options?: {
               diff: "",
             }),
           ...options?.layers?.checkpointDiffQuery,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(TurnDiffService)({
+          getTurnDiffView: () =>
+            Effect.succeed({
+              threadId: defaultThreadId,
+              turnId: TurnId.make("turn-default"),
+              mode: "completed",
+              revision: "revision-default",
+              files: [],
+              truncated: false,
+            }),
+          ...options?.layers?.turnDiffService,
         }),
       ),
     );
@@ -3060,6 +3080,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 diff: "full-diff",
               }),
           },
+          turnDiffService: {
+            getTurnDiffView: () =>
+              Effect.succeed({
+                threadId: ThreadId.make("thread-1"),
+                turnId: TurnId.make("turn-1"),
+                mode: "live",
+                revision: "revision-live",
+                files: [],
+                truncated: false,
+              }),
+          },
         },
       });
 
@@ -3086,6 +3117,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.equal(turnDiffResult.diff, "turn-diff");
+
+      const turnDiffViewResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.getTurnDiffView]({
+            threadId: ThreadId.make("thread-1"),
+            turnId: TurnId.make("turn-1"),
+            mode: "live",
+          }),
+        ),
+      );
+      assert.equal(turnDiffViewResult.revision, "revision-live");
 
       const fullDiffResult = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>

@@ -1506,6 +1506,93 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       }),
   );
 
+  it.effect("does not move latest turn backward when an older checkpoint completes late", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-late-checkpoint-1"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-late-checkpoint"),
+        occurredAt: "2026-02-26T14:00:00.000Z",
+        commandId: CommandId.make("cmd-late-checkpoint-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-late-checkpoint-1"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-late-checkpoint"),
+          projectId: ProjectId.make("project-late-checkpoint"),
+          title: "Late Checkpoint",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-02-26T14:00:00.000Z",
+          updatedAt: "2026-02-26T14:00:00.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.turn-state-set",
+        eventId: EventId.make("evt-late-checkpoint-2"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-late-checkpoint"),
+        occurredAt: "2026-02-26T14:00:02.000Z",
+        commandId: CommandId.make("cmd-late-checkpoint-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-late-checkpoint-2"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-late-checkpoint"),
+          turnId: TurnId.make("turn-2"),
+          state: "running",
+          requestedAt: "2026-02-26T14:00:02.000Z",
+          startedAt: "2026-02-26T14:00:02.000Z",
+          completedAt: null,
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.turn-diff-completed",
+        eventId: EventId.make("evt-late-checkpoint-3"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-late-checkpoint"),
+        occurredAt: "2026-02-26T14:00:03.000Z",
+        commandId: CommandId.make("cmd-late-checkpoint-3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-late-checkpoint-3"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-late-checkpoint"),
+          turnId: TurnId.make("turn-1"),
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-late-checkpoint/turn/1"),
+          status: "ready",
+          files: [],
+          assistantMessageId: MessageId.make("assistant-late-checkpoint-1"),
+          completedAt: "2026-02-26T14:00:03.000Z",
+        },
+      });
+
+      const rows = yield* sql<{ readonly latestTurnId: string | null }>`
+        SELECT latest_turn_id AS "latestTurnId"
+        FROM projection_threads
+        WHERE thread_id = 'thread-late-checkpoint'
+      `;
+      assert.equal(rows[0]?.latestTurnId, "turn-2");
+    }),
+  );
+
   it.effect("clears stale pending approvals from projected shell summaries", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

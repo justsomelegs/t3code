@@ -79,6 +79,7 @@ describe("CheckpointDiffQueryLive", () => {
           });
           return "diff patch";
         }),
+      diffCheckpointToWorkspace: () => Effect.succeed({ diff: "", truncated: false }),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -159,6 +160,7 @@ describe("CheckpointDiffQueryLive", () => {
           diffCheckpointsCalls.push({ ignoreWhitespace });
           return "diff patch";
         }),
+      diffCheckpointToWorkspace: () => Effect.succeed({ diff: "", truncated: false }),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -207,6 +209,7 @@ describe("CheckpointDiffQueryLive", () => {
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
+      diffCheckpointToWorkspace: () => Effect.succeed({ diff: "", truncated: false }),
       deleteCheckpointRefs: () => Effect.void,
     };
 

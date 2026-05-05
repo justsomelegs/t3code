@@ -44,6 +44,7 @@ import {
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
+  OrchestrationGetTurnDiffViewInput,
   OrchestrationReplayEventsError,
   OrchestrationReplayEventsInput,
   OrchestrationRpcSchemas,
@@ -364,6 +365,15 @@ export const WsOrchestrationGetTurnDiffRpc = Rpc.make(ORCHESTRATION_WS_METHODS.g
   error: OrchestrationGetTurnDiffError,
 });
 
+export const WsOrchestrationGetTurnDiffViewRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getTurnDiffView,
+  {
+    payload: OrchestrationGetTurnDiffViewInput,
+    success: OrchestrationRpcSchemas.getTurnDiffView.output,
+    error: OrchestrationGetTurnDiffError,
+  },
+);
+
 export const WsOrchestrationGetFullThreadDiffRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getFullThreadDiff,
   {
@@ -460,6 +470,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
+  WsOrchestrationGetTurnDiffViewRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
   WsOrchestrationSubscribeShellRpc,

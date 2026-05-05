@@ -300,6 +300,89 @@ describe("orchestration projector", () => {
     expect(thread?.session?.status).toBe("running");
   });
 
+  it("does not move latest turn backward when an older checkpoint completes late", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const model = createEmptyReadModel(createdAt);
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5.3-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const afterTurnTwoRunning = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.turn-state-set",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T08:00:02.000Z",
+          commandId: "cmd-turn-2-running",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            state: "running",
+            requestedAt: "2026-02-23T08:00:02.000Z",
+            startedAt: "2026-02-23T08:00:02.000Z",
+            completedAt: null,
+          },
+        }),
+      ),
+    );
+
+    const afterLateTurnOneCheckpoint = await Effect.runPromise(
+      projectEvent(
+        afterTurnTwoRunning,
+        makeEvent({
+          sequence: 3,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T08:00:03.000Z",
+          commandId: "cmd-turn-1-checkpoint",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/t3/checkpoints/thread-1/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: "assistant-msg-1",
+            completedAt: "2026-02-23T08:00:03.000Z",
+          },
+        }),
+      ),
+    );
+
+    const thread = afterLateTurnOneCheckpoint.threads[0];
+    expect(thread?.latestTurn?.turnId).toBe("turn-2");
+    expect(thread?.checkpoints.map((checkpoint) => checkpoint.turnId)).toEqual(["turn-1"]);
+  });
+
   it("updates canonical thread runtime mode from thread.runtime-mode-set", async () => {
     const createdAt = "2026-02-23T08:00:00.000Z";
     const updatedAt = "2026-02-23T08:00:05.000Z";

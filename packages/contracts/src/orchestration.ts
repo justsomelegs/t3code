@@ -20,6 +20,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",
+  getTurnDiffView: "orchestration.getTurnDiffView",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   replayEvents: "orchestration.replayEvents",
   subscribeShell: "orchestration.subscribeShell",
@@ -1170,6 +1171,47 @@ export const ThreadTurnDiff = TurnCountRange.mapFields(
   { unsafePreserveChecks: true },
 );
 
+export const OrchestrationTurnDiffMode = Schema.Literals(["completed", "live"]);
+export type OrchestrationTurnDiffMode = typeof OrchestrationTurnDiffMode.Type;
+
+export const OrchestrationTurnDiffFileStatus = Schema.Literals([
+  "added",
+  "modified",
+  "deleted",
+  "renamed",
+]);
+export type OrchestrationTurnDiffFileStatus = typeof OrchestrationTurnDiffFileStatus.Type;
+
+export const OrchestrationTurnDiffFile = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  previousPath: Schema.optional(TrimmedNonEmptyString),
+  status: OrchestrationTurnDiffFileStatus,
+  patch: Schema.String,
+  additions: NonNegativeInt,
+  deletions: NonNegativeInt,
+  hash: TrimmedNonEmptyString,
+});
+export type OrchestrationTurnDiffFile = typeof OrchestrationTurnDiffFile.Type;
+
+export const OrchestrationGetTurnDiffViewInput = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  mode: OrchestrationTurnDiffMode,
+  ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
+  paths: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+});
+export type OrchestrationGetTurnDiffViewInput = typeof OrchestrationGetTurnDiffViewInput.Type;
+
+export const OrchestrationGetTurnDiffViewResult = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  mode: OrchestrationTurnDiffMode,
+  revision: TrimmedNonEmptyString,
+  files: Schema.Array(OrchestrationTurnDiffFile),
+  truncated: Schema.Boolean,
+});
+export type OrchestrationGetTurnDiffViewResult = typeof OrchestrationGetTurnDiffViewResult.Type;
+
 export const ProviderSessionRuntimeStatus = Schema.Literals([
   "starting",
   "running",
@@ -1247,6 +1289,10 @@ export const OrchestrationRpcSchemas = {
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,
     output: OrchestrationGetTurnDiffResult,
+  },
+  getTurnDiffView: {
+    input: OrchestrationGetTurnDiffViewInput,
+    output: OrchestrationGetTurnDiffViewResult,
   },
   getFullThreadDiff: {
     input: OrchestrationGetFullThreadDiffInput,

@@ -20,6 +20,7 @@ import { CheckpointStore, type CheckpointStoreShape } from "../Services/Checkpoi
 import { CheckpointRef } from "@t3tools/contracts";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
+const CHECKPOINT_WORKSPACE_DIFF_MAX_OUTPUT_BYTES = 5_000_000;
 
 const makeCheckpointStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -280,6 +281,103 @@ const makeCheckpointStore = Effect.gen(function* () {
     },
   );
 
+  const diffCheckpointToWorkspace: CheckpointStoreShape["diffCheckpointToWorkspace"] = Effect.fn(
+    "diffCheckpointToWorkspace",
+  )(function* (input) {
+    const operation = "CheckpointStore.diffCheckpointToWorkspace";
+    const fromCommitOid = yield* resolveCheckpointCommit(input.cwd, input.fromCheckpointRef);
+
+    if (!fromCommitOid) {
+      return yield* new VcsProcessExitError({
+        operation,
+        command: "git diff",
+        cwd: input.cwd,
+        exitCode: 1,
+        detail: "Checkpoint ref is unavailable for live workspace diff operation.",
+      });
+    }
+
+    return yield* Effect.acquireUseRelease(
+      fs.makeTempDirectory({ prefix: "t3-fs-live-diff-" }),
+      Effect.fn("diffCheckpointToWorkspace.withTempDirectory")(function* (tempDir) {
+        const tempIndexPath = path.join(tempDir, `index-${randomUUID()}`);
+        const diffEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          GIT_INDEX_FILE: tempIndexPath,
+        };
+
+        const headExists = yield* hasHeadCommit(input.cwd);
+        if (headExists) {
+          yield* vcs.execute({
+            operation,
+            cwd: input.cwd,
+            args: ["read-tree", "HEAD"],
+            env: diffEnv,
+          });
+        }
+
+        yield* vcs.execute({
+          operation,
+          cwd: input.cwd,
+          args: ["add", "-A", "--", "."],
+          env: diffEnv,
+        });
+
+        const writeTreeResult = yield* vcs.execute({
+          operation,
+          cwd: input.cwd,
+          args: ["write-tree"],
+          env: diffEnv,
+        });
+        const workspaceTreeOid = writeTreeResult.stdout.trim();
+        if (workspaceTreeOid.length === 0) {
+          return yield* new VcsProcessExitError({
+            operation,
+            command: "git write-tree",
+            cwd: input.cwd,
+            exitCode: 0,
+            detail: "git write-tree returned an empty tree oid.",
+          });
+        }
+
+        const pathspec = input.paths && input.paths.length > 0 ? ["--", ...input.paths] : [];
+        const result = yield* vcs.execute({
+          operation,
+          cwd: input.cwd,
+          args: [
+            "diff",
+            "--patch",
+            "--minimal",
+            "--no-color",
+            ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
+            fromCommitOid,
+            workspaceTreeOid,
+            ...pathspec,
+          ],
+          maxOutputBytes: CHECKPOINT_WORKSPACE_DIFF_MAX_OUTPUT_BYTES,
+          truncateOutputAtMaxBytes: true,
+        });
+
+        return {
+          diff: result.stdout,
+          truncated: result.stdoutTruncated,
+        };
+      }),
+      (tempDir) => fs.remove(tempDir, { recursive: true }),
+    ).pipe(
+      Effect.catchTags({
+        PlatformError: (error) =>
+          Effect.fail(
+            new CheckpointInvariantError({
+              operation,
+              detail: "Failed to compute live workspace diff.",
+              cause: error,
+            }),
+          ),
+      }),
+    );
+  });
+
   const deleteCheckpointRefs: CheckpointStoreShape["deleteCheckpointRefs"] = Effect.fn(
     "deleteCheckpointRefs",
   )(function* (input) {
@@ -304,6 +402,7 @@ const makeCheckpointStore = Effect.gen(function* () {
     hasCheckpointRef,
     restoreCheckpoint,
     diffCheckpoints,
+    diffCheckpointToWorkspace,
     deleteCheckpointRefs,
   } satisfies CheckpointStoreShape;
 });

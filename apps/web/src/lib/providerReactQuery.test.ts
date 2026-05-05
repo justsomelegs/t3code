@@ -1,7 +1,11 @@
-import { EnvironmentId, ThreadId, type EnvironmentApi } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, TurnId, type EnvironmentApi } from "@t3tools/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkpointDiffQueryOptions, providerQueryKeys } from "./providerReactQuery";
+import {
+  checkpointDiffQueryOptions,
+  providerQueryKeys,
+  turnDiffViewQueryOptions,
+} from "./providerReactQuery";
 import * as environmentApi from "../environmentApi";
 
 const threadId = ThreadId.make("thread-id");
@@ -9,11 +13,13 @@ const environmentId = EnvironmentId.make("environment-local");
 
 function mockNativeApi(input: {
   getTurnDiff: ReturnType<typeof vi.fn>;
+  getTurnDiffView?: ReturnType<typeof vi.fn>;
   getFullThreadDiff: ReturnType<typeof vi.fn>;
 }) {
   vi.spyOn(environmentApi, "ensureEnvironmentApi").mockReturnValue({
     orchestration: {
       getTurnDiff: input.getTurnDiff,
+      getTurnDiffView: input.getTurnDiffView ?? vi.fn(),
       getFullThreadDiff: input.getFullThreadDiff,
     },
   } as unknown as EnvironmentApi);
@@ -21,6 +27,45 @@ function mockNativeApi(input: {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("turnDiffViewQueryOptions", () => {
+  it("forwards live turn diff view requests to the provider API", async () => {
+    const turnId = TurnId.make("turn-live");
+    const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    const getTurnDiffView = vi.fn().mockResolvedValue({
+      threadId,
+      turnId,
+      mode: "live",
+      revision: "revision-1",
+      files: [],
+      truncated: false,
+    });
+    const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    mockNativeApi({ getTurnDiff, getTurnDiffView, getFullThreadDiff });
+
+    const options = turnDiffViewQueryOptions({
+      environmentId,
+      threadId,
+      turnId,
+      mode: "live",
+      ignoreWhitespace: true,
+      paths: ["src/file.ts"],
+    });
+
+    const queryClient = new QueryClient();
+    await queryClient.fetchQuery(options);
+
+    expect(getTurnDiffView).toHaveBeenCalledWith({
+      threadId,
+      turnId,
+      mode: "live",
+      ignoreWhitespace: true,
+      paths: ["src/file.ts"],
+    });
+    expect(getTurnDiff).not.toHaveBeenCalled();
+    expect(getFullThreadDiff).not.toHaveBeenCalled();
+  });
 });
 
 describe("providerQueryKeys.checkpointDiff", () => {

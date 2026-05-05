@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseTurnDiffFilesFromUnifiedDiff } from "./Diffs.ts";
+import { normalizeUnifiedDiffToTurnDiffFiles, parseTurnDiffFilesFromUnifiedDiff } from "./Diffs.ts";
 
 describe("parseTurnDiffFilesFromUnifiedDiff", () => {
   it("returns empty list for empty diff", () => {
@@ -64,5 +64,47 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
     expect(parseTurnDiffFilesFromUnifiedDiff(diff)).toEqual([
       { path: "a.txt", additions: 2, deletions: 1 },
     ]);
+  });
+});
+
+describe("normalizeUnifiedDiffToTurnDiffFiles", () => {
+  it("returns stable per-file patch records", () => {
+    const diff = [
+      "diff --git a/a.txt b/a.txt",
+      "index 1111111..2222222 100644",
+      "--- a/a.txt",
+      "+++ b/a.txt",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "diff --git a/created.txt b/created.txt",
+      "new file mode 100644",
+      "index 0000000..3333333",
+      "--- /dev/null",
+      "+++ b/created.txt",
+      "@@ -0,0 +1 @@",
+      "+created",
+      "",
+    ].join("\n");
+
+    const files = normalizeUnifiedDiffToTurnDiffFiles(diff);
+
+    expect(files).toMatchObject([
+      {
+        path: "a.txt",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+      },
+      {
+        path: "created.txt",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+      },
+    ]);
+    expect(files[0]?.patch).toContain("diff --git a/a.txt b/a.txt");
+    expect(files[0]?.patch).not.toContain("created.txt");
+    expect(files[0]?.hash).toMatch(/^[a-f0-9]{64}$/);
   });
 });

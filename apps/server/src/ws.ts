@@ -28,6 +28,7 @@ import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
+import { TurnDiffService } from "./checkpointing/Services/TurnDiffService.ts";
 import { ServerConfig } from "./config.ts";
 import { Keybindings } from "./keybindings.ts";
 import { Open, resolveAvailableEditors } from "./open.ts";
@@ -148,6 +149,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
+      const turnDiffService = yield* TurnDiffService;
       const keybindings = yield* Keybindings;
       const open = yield* Open;
       const gitWorkflow = yield* GitWorkflowService;
@@ -640,6 +642,20 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 (cause) =>
                   new OrchestrationGetTurnDiffError({
                     message: "Failed to load turn diff",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getTurnDiffView]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getTurnDiffView,
+            turnDiffService.getTurnDiffView(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetTurnDiffError({
+                    message: "Failed to load turn diff view",
                     cause,
                   }),
               ),

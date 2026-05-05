@@ -198,4 +198,67 @@ it.layer(TestLayer)("CheckpointStoreLive", (it) => {
       }),
     );
   });
+
+  describe("diffCheckpointToWorkspace", () => {
+    it.effect("diffs a checkpoint against the current workspace without mutating the index", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const checkpointStore = yield* CheckpointStore;
+        const threadId = ThreadId.make("thread-live-diff-store");
+        const fromCheckpointRef = checkpointRefForThreadTurn(threadId, 0);
+
+        yield* checkpointStore.captureCheckpoint({
+          cwd: tmp,
+          checkpointRef: fromCheckpointRef,
+        });
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\n\nupdated\n");
+        yield* writeTextFile(path.join(tmp, "new-file.txt"), "new content\n");
+
+        const beforeStatus = yield* git(tmp, ["status", "--porcelain"]);
+        const result = yield* checkpointStore.diffCheckpointToWorkspace({
+          cwd: tmp,
+          fromCheckpointRef,
+          ignoreWhitespace: false,
+        });
+        const afterStatus = yield* git(tmp, ["status", "--porcelain"]);
+
+        expect(result.truncated).toBe(false);
+        expect(result.diff).toContain("diff --git a/README.md b/README.md");
+        expect(result.diff).toContain("+updated");
+        expect(result.diff).toContain("diff --git a/new-file.txt b/new-file.txt");
+        expect(result.diff).toContain("+new content");
+        expect(afterStatus).toBe(beforeStatus);
+      }),
+    );
+
+    it.effect("can limit live workspace diffs to selected paths", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const checkpointStore = yield* CheckpointStore;
+        const threadId = ThreadId.make("thread-live-diff-paths");
+        const fromCheckpointRef = checkpointRefForThreadTurn(threadId, 0);
+
+        yield* checkpointStore.captureCheckpoint({
+          cwd: tmp,
+          checkpointRef: fromCheckpointRef,
+        });
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\n\nupdated\n");
+        yield* writeTextFile(path.join(tmp, "other.txt"), "other\n");
+
+        const result = yield* checkpointStore.diffCheckpointToWorkspace({
+          cwd: tmp,
+          fromCheckpointRef,
+          ignoreWhitespace: false,
+          paths: ["README.md"],
+        });
+
+        expect(result.diff).toContain("diff --git a/README.md b/README.md");
+        expect(result.diff).not.toContain("other.txt");
+      }),
+    );
+  });
 });
