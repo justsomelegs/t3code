@@ -107,4 +107,29 @@ describe("normalizeUnifiedDiffToTurnDiffFiles", () => {
     expect(files[0]?.patch).not.toContain("created.txt");
     expect(files[0]?.hash).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it("keeps parser metadata for renames and paths with spaces", () => {
+    const diff = [
+      'diff --git "a/src/old name.ts" "b/src/new name.ts"',
+      "similarity index 86%",
+      "rename from src/old name.ts",
+      "rename to src/new name.ts",
+      "--- a/src/old name.ts",
+      "+++ b/src/new name.ts",
+      "@@ -1 +1 @@",
+      "-export const value = 'old';",
+      "+export const value = 'new';",
+      "",
+    ].join("\n");
+
+    expect(normalizeUnifiedDiffToTurnDiffFiles(diff)).toMatchObject([
+      {
+        path: "src/new name.ts",
+        previousPath: "src/old name.ts",
+        status: "renamed",
+        additions: 1,
+        deletions: 1,
+      },
+    ]);
+  });
 });

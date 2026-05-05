@@ -363,10 +363,8 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     if (!gitStatusQuery.data) {
       return null;
     }
-    return gitStatusQuery.data.workingTree.files
-      .map((file) => `${file.path}:${file.insertions}:${file.deletions}`)
-      .join("|");
-  }, [gitStatusQuery.data]);
+    return String(gitStatusQuery.revision);
+  }, [gitStatusQuery.data, gitStatusQuery.revision]);
   const liveTurnDiffQuery = useQuery({
     ...turnDiffViewQueryOptions({
       environmentId: activeThread?.environmentId ?? null,

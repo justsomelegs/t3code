@@ -20,6 +20,7 @@ interface GitStatusState {
   readonly error: GitManagerServiceError | null;
   readonly cause: Cause.Cause<GitManagerServiceError> | null;
   readonly isPending: boolean;
+  readonly revision: number;
 }
 
 type GitStatusClient = Pick<WsRpcClient["vcs"], "onStatus" | "refreshStatus">;
@@ -43,6 +44,7 @@ const EMPTY_GIT_STATUS_STATE = Object.freeze<GitStatusState>({
   error: null,
   cause: null,
   isPending: false,
+  revision: 0,
 });
 const INITIAL_GIT_STATUS_STATE = Object.freeze<GitStatusState>({
   ...EMPTY_GIT_STATUS_STATE,
@@ -246,11 +248,13 @@ function subscribeToGitStatus(targetKey: string, cwd: string, client: GitStatusC
   return client.onStatus(
     { cwd },
     (status: VcsStatusResult) => {
+      const current = appAtomRegistry.get(gitStatusStateAtom(targetKey));
       appAtomRegistry.set(gitStatusStateAtom(targetKey), {
         data: status,
         error: null,
         cause: null,
         isPending: false,
+        revision: current.revision + 1,
       });
     },
     {
@@ -278,7 +282,8 @@ function markGitStatusPending(targetKey: string): void {
     current.data === next.data &&
     current.error === next.error &&
     current.cause === next.cause &&
-    current.isPending === next.isPending
+    current.isPending === next.isPending &&
+    current.revision === next.revision
   ) {
     return;
   }

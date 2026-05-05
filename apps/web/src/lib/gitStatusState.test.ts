@@ -183,6 +183,7 @@ describe("gitStatusState", () => {
       error: null,
       cause: null,
       isPending: true,
+      revision: 0,
     });
   });
 
@@ -196,6 +197,7 @@ describe("gitStatusState", () => {
       error: null,
       cause: null,
       isPending: true,
+      revision: 0,
     });
 
     emitGitStatus(BASE_STATUS);
@@ -205,6 +207,7 @@ describe("gitStatusState", () => {
       error: null,
       cause: null,
       isPending: false,
+      revision: 1,
     });
 
     releaseA();
@@ -212,6 +215,30 @@ describe("gitStatusState", () => {
 
     releaseB();
     expect(gitStatusListeners.size).toBe(0);
+  });
+
+  it("increments the local revision for repeated status events with identical stats", () => {
+    const release = watchGitStatus(TARGET, gitClient);
+    const changedStatus = {
+      ...BASE_STATUS,
+      hasWorkingTreeChanges: true,
+      workingTree: {
+        files: [{ path: "src/app.ts", insertions: 1, deletions: 1 }],
+        insertions: 1,
+        deletions: 1,
+      },
+    } satisfies VcsStatusResult;
+
+    emitGitStatus(changedStatus);
+    emitGitStatus(changedStatus);
+
+    expect(getGitStatusSnapshot(TARGET)).toMatchObject({
+      data: changedStatus,
+      isPending: false,
+      revision: 2,
+    });
+
+    release();
   });
 
   it("refreshes git status through the unary RPC without restarting the stream", async () => {
@@ -228,6 +255,7 @@ describe("gitStatusState", () => {
       error: null,
       cause: null,
       isPending: false,
+      revision: 1,
     });
 
     release();
@@ -275,6 +303,7 @@ describe("gitStatusState", () => {
       error: null,
       cause: null,
       isPending: true,
+      revision: 0,
     });
 
     const registered = createRegisteredGitStatusClient(ENVIRONMENT_ID);
@@ -285,6 +314,7 @@ describe("gitStatusState", () => {
       error: null,
       cause: null,
       isPending: false,
+      revision: 1,
     });
 
     release();
@@ -307,6 +337,7 @@ describe("gitStatusState", () => {
       error: null,
       cause: null,
       isPending: true,
+      revision: 1,
     });
 
     const secondClient = createRegisteredGitStatusClient(ENVIRONMENT_ID);
@@ -317,6 +348,7 @@ describe("gitStatusState", () => {
       error: null,
       cause: null,
       isPending: false,
+      revision: 2,
     });
 
     release();
