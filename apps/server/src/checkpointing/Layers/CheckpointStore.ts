@@ -340,7 +340,15 @@ const makeCheckpointStore = Effect.gen(function* () {
           });
         }
 
-        const pathspec = input.paths && input.paths.length > 0 ? ["--", ...input.paths] : [];
+        const pathspec =
+          input.scope.type === "workspace"
+            ? []
+            : [
+                "--",
+                input.scope.type === "directory" && !input.scope.path.endsWith("/")
+                  ? `${input.scope.path}/`
+                  : input.scope.path,
+              ];
         const result = yield* vcs.execute({
           operation,
           cwd: input.cwd,

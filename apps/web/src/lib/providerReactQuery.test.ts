@@ -50,7 +50,7 @@ describe("turnDiffViewQueryOptions", () => {
       turnId,
       mode: "live",
       ignoreWhitespace: true,
-      paths: ["src/file.ts"],
+      scope: { type: "file", path: "src/file.ts" },
     });
 
     const queryClient = new QueryClient();
@@ -61,7 +61,7 @@ describe("turnDiffViewQueryOptions", () => {
       turnId,
       mode: "live",
       ignoreWhitespace: true,
-      paths: ["src/file.ts"],
+      scope: { type: "file", path: "src/file.ts" },
     });
     expect(getTurnDiff).not.toHaveBeenCalled();
     expect(getFullThreadDiff).not.toHaveBeenCalled();

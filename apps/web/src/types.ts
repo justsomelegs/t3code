@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   ModelSelection,
   OrchestrationLatestTurn,
+  OrchestrationTurnCheckpointState,
   OrchestrationProposedPlanId,
   RepositoryIdentity,
   OrchestrationSessionStatus,
@@ -82,6 +83,7 @@ export interface TurnDiffSummary {
   source?: "checkpoint" | "legacy-provider-diff" | undefined;
   isRevertable?: boolean | undefined;
   isFullDiffAvailable?: boolean | undefined;
+  checkpointState?: OrchestrationTurnCheckpointState | undefined;
 }
 
 export interface Project {

@@ -9,6 +9,7 @@ import {
 import { checkpointRefForThreadTurn } from "../Utils.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { TurnDiffService } from "../Services/TurnDiffService.ts";
+import { WorkspaceDiffSnapshotService } from "../Services/WorkspaceDiffSnapshotService.ts";
 import { TurnDiffServiceLive } from "./TurnDiffService.ts";
 
 function makeContext(input: {
@@ -88,6 +89,11 @@ describe("TurnDiffServiceLive", () => {
     const layer = TurnDiffServiceLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
+        Layer.succeed(WorkspaceDiffSnapshotService, {
+          getLiveTurnDiff: () => Effect.succeed({ files: [], truncated: false }),
+        }),
+      ),
+      Layer.provideMerge(
         makeProjectionLayer(
           makeContext({ threadId, turnId, checkpointTurnCount: 1, checkpointRef: toCheckpointRef }),
         ),
@@ -122,40 +128,49 @@ describe("TurnDiffServiceLive", () => {
     const completedTurnId = TurnId.make("turn-1");
     const liveTurnId = TurnId.make("turn-2");
     const baselineCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
-    const liveCalls: Array<{
-      readonly fromCheckpointRef: CheckpointRef;
-      readonly paths?: string[];
-    }> = [];
+    const liveCalls: Array<{ readonly fromCheckpointRef: CheckpointRef; readonly scope: unknown }> =
+      [];
     const checkpointStore: CheckpointStoreShape = {
       isGitRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
-      diffCheckpointToWorkspace: ({ fromCheckpointRef, paths }) =>
-        Effect.sync(() => {
-          liveCalls.push({
-            fromCheckpointRef,
-            ...(paths ? { paths: [...paths] } : {}),
-          });
-          return {
-            diff: [
-              "diff --git a/live.txt b/live.txt",
-              "new file mode 100644",
-              "index 0000000..2222222",
-              "--- /dev/null",
-              "+++ b/live.txt",
-              "@@ -0,0 +1 @@",
-              "+live",
-            ].join("\n"),
-            truncated: false,
-          };
-        }),
+      diffCheckpointToWorkspace: () => Effect.succeed({ diff: "", truncated: false }),
       deleteCheckpointRefs: () => Effect.void,
     };
 
     const layer = TurnDiffServiceLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(
+        Layer.succeed(WorkspaceDiffSnapshotService, {
+          getLiveTurnDiff: ({ fromCheckpointRef, scope }) =>
+            Effect.sync(() => {
+              liveCalls.push({ fromCheckpointRef, scope });
+              return {
+                files: [
+                  {
+                    path: "live.txt",
+                    status: "added" as const,
+                    patch: [
+                      "diff --git a/live.txt b/live.txt",
+                      "new file mode 100644",
+                      "index 0000000..2222222",
+                      "--- /dev/null",
+                      "+++ b/live.txt",
+                      "@@ -0,0 +1 @@",
+                      "+live",
+                    ].join("\n"),
+                    additions: 1,
+                    deletions: 0,
+                    hash: "hash-live",
+                  },
+                ],
+                truncated: false,
+              };
+            }),
+        }),
+      ),
       Layer.provideMerge(
         makeProjectionLayer(
           makeContext({
@@ -175,12 +190,14 @@ describe("TurnDiffServiceLive", () => {
           threadId,
           turnId: liveTurnId,
           mode: "live",
-          paths: ["live.txt"],
+          scope: { type: "file", path: "live.txt" },
         });
       }).pipe(Effect.provide(layer)),
     );
 
-    expect(liveCalls).toEqual([{ fromCheckpointRef: baselineCheckpointRef, paths: ["live.txt"] }]);
+    expect(liveCalls).toEqual([
+      { fromCheckpointRef: baselineCheckpointRef, scope: { type: "file", path: "live.txt" } },
+    ]);
     expect(result.files).toMatchObject([
       {
         path: "live.txt",

@@ -13,6 +13,7 @@ import { normalizeUnifiedDiffToTurnDiffFiles } from "../Diffs.ts";
 import { checkpointRefForThreadTurn } from "../Utils.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { TurnDiffService, type TurnDiffServiceShape } from "../Services/TurnDiffService.ts";
+import { WorkspaceDiffSnapshotService } from "../Services/WorkspaceDiffSnapshotService.ts";
 
 const isTurnDiffViewResult = Schema.is(OrchestrationGetTurnDiffViewResult);
 const isRealCheckpointRef = (checkpointRef: string) =>
@@ -44,6 +45,7 @@ function checkpointForTurnCount(
 const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const checkpointStore = yield* CheckpointStore;
+  const workspaceDiffSnapshotService = yield* WorkspaceDiffSnapshotService;
 
   const resolveThreadContext = Effect.fn("TurnDiffService.resolveThreadContext")(function* (
     threadId: ThreadId,
@@ -127,7 +129,7 @@ const make = Effect.gen(function* () {
         cwd: context.workspaceCwd,
       });
 
-      const diffResult =
+      const viewResult =
         input.mode === "completed"
           ? yield* Effect.gen(function* () {
               if (!targetCheckpoint) {
@@ -150,24 +152,28 @@ const make = Effect.gen(function* () {
                 fallbackFromToHead: false,
                 ignoreWhitespace,
               });
-              return { diff, truncated: false, toCheckpointRef: toRef };
+              return {
+                files: normalizeUnifiedDiffToTurnDiffFiles(diff),
+                truncated: false,
+                toCheckpointRef: toRef,
+              };
             })
-          : yield* checkpointStore
-              .diffCheckpointToWorkspace({
+          : yield* workspaceDiffSnapshotService
+              .getLiveTurnDiff({
                 cwd: context.workspaceCwd,
                 fromCheckpointRef: fromRef,
                 ignoreWhitespace,
-                ...(input.paths ? { paths: input.paths } : {}),
+                scope: input.scope ?? { type: "workspace" },
               })
               .pipe(
                 Effect.map((result) => ({
-                  diff: result.diff,
+                  files: result.files,
                   truncated: result.truncated,
                   toCheckpointRef: undefined,
                 })),
               );
 
-      const files = normalizeUnifiedDiffToTurnDiffFiles(diffResult.diff);
+      const files = viewResult.files;
       const turnDiffView: OrchestrationGetTurnDiffViewResultType = {
         threadId: input.threadId,
         turnId: input.turnId,
@@ -175,11 +181,11 @@ const make = Effect.gen(function* () {
         revision: makeRevision({
           mode: input.mode,
           fromCheckpointRef: fromRef,
-          ...(diffResult.toCheckpointRef ? { toCheckpointRef: diffResult.toCheckpointRef } : {}),
+          ...(viewResult.toCheckpointRef ? { toCheckpointRef: viewResult.toCheckpointRef } : {}),
           filesHash: files.map((file) => file.hash).join(".") || "empty",
         }),
         files,
-        truncated: diffResult.truncated,
+        truncated: viewResult.truncated,
       };
 
       if (!isTurnDiffViewResult(turnDiffView)) {

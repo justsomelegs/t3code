@@ -86,6 +86,8 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.turn-state-set"
+      | "thread.turn-checkpoint-capture-started"
+      | "thread.turn-checkpoint-capture-failed"
       | "thread.reverted"
       | "thread.session-set";
   }
@@ -96,6 +98,8 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.turn-state-set" ||
+    event.type === "thread.turn-checkpoint-capture-started" ||
+    event.type === "thread.turn-checkpoint-capture-failed" ||
     event.type === "thread.reverted" ||
     event.type === "thread.session-set"
   );

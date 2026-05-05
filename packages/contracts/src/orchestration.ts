@@ -278,6 +278,15 @@ export type OrchestrationCheckpointStatus = typeof OrchestrationCheckpointStatus
 export const OrchestrationTurnDiffSource = Schema.Literals(["checkpoint", "legacy-provider-diff"]);
 export type OrchestrationTurnDiffSource = typeof OrchestrationTurnDiffSource.Type;
 
+export const OrchestrationTurnCheckpointState = Schema.Literals([
+  "not-started",
+  "capturing",
+  "ready",
+  "unavailable",
+  "error",
+]);
+export type OrchestrationTurnCheckpointState = typeof OrchestrationTurnCheckpointState.Type;
+
 export const OrchestrationCheckpointSummary = Schema.Struct({
   turnId: TurnId,
   checkpointTurnCount: NonNegativeInt,
@@ -289,6 +298,7 @@ export const OrchestrationCheckpointSummary = Schema.Struct({
   source: Schema.optional(OrchestrationTurnDiffSource),
   isRevertable: Schema.optional(Schema.Boolean),
   isFullDiffAvailable: Schema.optional(Schema.Boolean),
+  checkpointState: Schema.optional(OrchestrationTurnCheckpointState),
 });
 export type OrchestrationCheckpointSummary = typeof OrchestrationCheckpointSummary.Type;
 
@@ -330,6 +340,7 @@ export const OrchestrationLatestTurn = Schema.Struct({
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
   assistantMessageId: Schema.NullOr(MessageId),
+  checkpointState: Schema.optional(OrchestrationTurnCheckpointState),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
@@ -752,6 +763,24 @@ const ThreadTurnStateSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTurnCheckpointCaptureStartedCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.checkpoint-capture.start"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadTurnCheckpointCaptureFailedCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.checkpoint-capture.fail"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnId: TurnId,
+  checkpointState: Schema.Literals(["unavailable", "error"]),
+  message: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const ThreadActivityAppendCommand = Schema.Struct({
   type: Schema.Literal("thread.activity.append"),
   commandId: CommandId,
@@ -775,6 +804,8 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadTurnStateSetCommand,
+  ThreadTurnCheckpointCaptureStartedCommand,
+  ThreadTurnCheckpointCaptureFailedCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
 ]);
@@ -809,6 +840,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.turn-state-set",
+  "thread.turn-checkpoint-capture-started",
+  "thread.turn-checkpoint-capture-failed",
   "thread.activity-appended",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
@@ -989,6 +1022,18 @@ export const ThreadTurnStateSetPayload = Schema.Struct({
   assistantMessageId: Schema.optional(Schema.NullOr(MessageId)),
 });
 
+export const ThreadTurnCheckpointCaptureStartedPayload = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+});
+
+export const ThreadTurnCheckpointCaptureFailedPayload = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  checkpointState: Schema.Literals(["unavailable", "error"]),
+  message: TrimmedNonEmptyString,
+});
+
 export const ThreadActivityAppendedPayload = Schema.Struct({
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
@@ -1128,6 +1173,16 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.turn-checkpoint-capture-started"),
+    payload: ThreadTurnCheckpointCaptureStartedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-checkpoint-capture-failed"),
+    payload: ThreadTurnCheckpointCaptureFailedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
   }),
@@ -1174,6 +1229,13 @@ export const ThreadTurnDiff = TurnCountRange.mapFields(
 export const OrchestrationTurnDiffMode = Schema.Literals(["completed", "live"]);
 export type OrchestrationTurnDiffMode = typeof OrchestrationTurnDiffMode.Type;
 
+export const OrchestrationTurnDiffScope = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("workspace") }),
+  Schema.Struct({ type: Schema.Literal("file"), path: TrimmedNonEmptyString }),
+  Schema.Struct({ type: Schema.Literal("directory"), path: TrimmedNonEmptyString }),
+]);
+export type OrchestrationTurnDiffScope = typeof OrchestrationTurnDiffScope.Type;
+
 export const OrchestrationTurnDiffFileStatus = Schema.Literals([
   "added",
   "modified",
@@ -1198,7 +1260,7 @@ export const OrchestrationGetTurnDiffViewInput = Schema.Struct({
   turnId: TurnId,
   mode: OrchestrationTurnDiffMode,
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
-  paths: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  scope: Schema.optionalKey(OrchestrationTurnDiffScope),
 });
 export type OrchestrationGetTurnDiffViewInput = typeof OrchestrationGetTurnDiffViewInput.Type;
 

@@ -48,6 +48,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+import { checkpointStatusToCaptureState } from "../projectionRules.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -748,6 +749,22 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.turn-checkpoint-capture-started":
+        case "thread.turn-checkpoint-capture-failed": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            updatedAt: event.occurredAt,
+          });
+          yield* refreshThreadShellSummary(event.payload.threadId);
+          return;
+        }
+
         case "thread.reverted": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
@@ -1076,6 +1093,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               checkpointTurnCount: null,
               checkpointRef: null,
               checkpointStatus: null,
+              checkpointCaptureState: "not-started",
               checkpointFiles: [],
             });
           }
@@ -1118,6 +1136,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             checkpointTurnCount: null,
             checkpointRef: null,
             checkpointStatus: null,
+            checkpointCaptureState: "not-started",
             checkpointFiles: [],
           });
           return;
@@ -1155,6 +1174,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             checkpointTurnCount: null,
             checkpointRef: null,
             checkpointStatus: null,
+            checkpointCaptureState: "not-started",
             checkpointFiles: [],
           });
           return;
@@ -1220,12 +1240,32 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               checkpointTurnCount: null,
               checkpointRef: null,
               checkpointStatus: null,
+              checkpointCaptureState: "not-started",
               checkpointFiles: [],
             });
           }
 
           yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
             threadId: event.payload.threadId,
+          });
+          return;
+        }
+
+        case "thread.turn-checkpoint-capture-started":
+        case "thread.turn-checkpoint-capture-failed": {
+          const existingTurn = yield* projectionTurnRepository.getByTurnId({
+            threadId: event.payload.threadId,
+            turnId: event.payload.turnId,
+          });
+          if (Option.isNone(existingTurn)) {
+            return;
+          }
+          yield* projectionTurnRepository.upsertByTurnId({
+            ...existingTurn.value,
+            checkpointCaptureState:
+              event.type === "thread.turn-checkpoint-capture-started"
+                ? "capturing"
+                : event.payload.checkpointState,
           });
           return;
         }
@@ -1253,6 +1293,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               checkpointTurnCount: event.payload.checkpointTurnCount,
               checkpointRef: event.payload.checkpointRef,
               checkpointStatus: event.payload.status,
+              checkpointCaptureState: checkpointStatusToCaptureState(event.payload.status),
               checkpointFiles: event.payload.files,
               startedAt: existingTurn.value.startedAt ?? event.payload.completedAt,
               requestedAt: existingTurn.value.requestedAt ?? event.payload.completedAt,
@@ -1274,6 +1315,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             checkpointTurnCount: event.payload.checkpointTurnCount,
             checkpointRef: event.payload.checkpointRef,
             checkpointStatus: event.payload.status,
+            checkpointCaptureState: checkpointStatusToCaptureState(event.payload.status),
             checkpointFiles: event.payload.files,
           });
           return;

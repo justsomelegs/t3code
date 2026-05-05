@@ -13,6 +13,8 @@ import {
   ThreadProposedPlanUpsertedPayload as ContractsThreadProposedPlanUpsertedPayloadSchema,
   ThreadSessionSetPayload as ContractsThreadSessionSetPayloadSchema,
   ThreadTurnDiffCompletedPayload as ContractsThreadTurnDiffCompletedPayloadSchema,
+  ThreadTurnCheckpointCaptureFailedPayload as ContractsThreadTurnCheckpointCaptureFailedPayloadSchema,
+  ThreadTurnCheckpointCaptureStartedPayload as ContractsThreadTurnCheckpointCaptureStartedPayloadSchema,
   ThreadTurnStateSetPayload as ContractsThreadTurnStateSetPayloadSchema,
   ThreadRevertedPayload as ContractsThreadRevertedPayloadSchema,
   ThreadActivityAppendedPayload as ContractsThreadActivityAppendedPayloadSchema,
@@ -40,6 +42,10 @@ export const MessageSentPayloadSchema = ContractsThreadMessageSentPayloadSchema;
 export const ThreadProposedPlanUpsertedPayload = ContractsThreadProposedPlanUpsertedPayloadSchema;
 export const ThreadSessionSetPayload = ContractsThreadSessionSetPayloadSchema;
 export const ThreadTurnDiffCompletedPayload = ContractsThreadTurnDiffCompletedPayloadSchema;
+export const ThreadTurnCheckpointCaptureStartedPayload =
+  ContractsThreadTurnCheckpointCaptureStartedPayloadSchema;
+export const ThreadTurnCheckpointCaptureFailedPayload =
+  ContractsThreadTurnCheckpointCaptureFailedPayloadSchema;
 export const ThreadTurnStateSetPayload = ContractsThreadTurnStateSetPayloadSchema;
 export const ThreadRevertedPayload = ContractsThreadRevertedPayloadSchema;
 export const ThreadActivityAppendedPayload = ContractsThreadActivityAppendedPayloadSchema;

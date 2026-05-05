@@ -291,11 +291,12 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     !!selectedTurn &&
     activeThread?.latestTurn?.state === "running" &&
     selectedTurn.turnId === activeThread.latestTurn.turnId;
-  const selectedFinalizingTurn =
+  const selectedCheckpointPendingTurn =
     !!selectedTurn &&
     !selectedRunningTurn &&
     selectedTurn.checkpointTurnCount === undefined &&
     activeThread?.latestTurn?.turnId === selectedTurn.turnId;
+  const selectedCurrentTurn = selectedRunningTurn || selectedCheckpointPendingTurn;
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
@@ -334,7 +335,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     [conversationCheckpointTurnCount, selectedTurn],
   );
   const activeCheckpointRange = selectedTurn
-    ? selectedRunningTurn || selectedFinalizingTurn
+    ? selectedCurrentTurn
       ? null
       : selectedCheckpointRange
     : conversationCheckpointRange;
@@ -352,12 +353,8 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
       cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
-      enabled: isGitRepo && !selectedRunningTurn && !selectedFinalizingTurn,
+      enabled: isGitRepo && !selectedCurrentTurn,
     }),
-  );
-  const liveDiffPaths = useMemo(
-    () => gitStatusQuery.data?.workingTree.files.map((file) => file.path) ?? null,
-    [gitStatusQuery.data?.workingTree.files],
   );
   const liveDiffRevisionKey = useMemo(() => {
     if (!gitStatusQuery.data) {
@@ -372,7 +369,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       turnId: selectedRunningTurn ? selectedTurn.turnId : null,
       mode: "live",
       ignoreWhitespace: diffIgnoreWhitespace,
-      paths: liveDiffPaths,
+      scope: selectedFilePath ? { type: "file", path: selectedFilePath } : { type: "workspace" },
       revisionKey: liveDiffRevisionKey,
       enabled: isGitRepo && selectedRunningTurn && diffOpen,
     }),
@@ -408,12 +405,11 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       ),
     }));
   }, [liveTurnDiffQuery.data?.files, selectedRunningTurn, selectedTurn]);
-  const activeLiveFiles =
-    selectedRunningTurn || selectedFinalizingTurn
-      ? lastLiveTurnFiles?.turnId === selectedTurn?.turnId
-        ? lastLiveTurnFiles.files
-        : null
-      : null;
+  const activeLiveFiles = selectedCurrentTurn
+    ? lastLiveTurnFiles?.turnId === selectedTurn?.turnId
+      ? lastLiveTurnFiles.files
+      : null
+    : null;
   const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasResolvedLiveFiles = activeLiveFiles !== null;
@@ -674,15 +670,14 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
               >
                 <div className="flex items-center gap-1">
                   <span className="text-[10px] leading-tight font-medium">
-                    {summary.status === "running"
+                    {activeThread?.latestTurn?.turnId === summary.turnId &&
+                    summary.checkpointTurnCount === undefined
                       ? "Current"
-                      : selectedFinalizingTurn && summary.turnId === selectedTurn?.turnId
-                        ? "Finalizing"
-                        : `Turn ${
-                            summary.checkpointTurnCount ??
-                            inferredCheckpointTurnCountByTurnId[summary.turnId] ??
-                            "?"
-                          }`}
+                      : `Turn ${
+                          summary.checkpointTurnCount ??
+                          inferredCheckpointTurnCountByTurnId[summary.turnId] ??
+                          "?"
+                        }`}
                   </span>
                   <span className="text-[9px] leading-tight opacity-70">
                     {formatShortTimestamp(summary.completedAt, settings.timestampFormat)}

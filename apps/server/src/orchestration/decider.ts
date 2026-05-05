@@ -718,6 +718,50 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.turn.checkpoint-capture.start": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.turn-checkpoint-capture-started",
+        payload: {
+          threadId: command.threadId,
+          turnId: command.turnId,
+        },
+      };
+    }
+
+    case "thread.turn.checkpoint-capture.fail": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.turn-checkpoint-capture-failed",
+        payload: {
+          threadId: command.threadId,
+          turnId: command.turnId,
+          checkpointState: command.checkpointState,
+          message: command.message,
+        },
+      };
+    }
+
     case "thread.revert.complete": {
       yield* requireThread({
         readModel,

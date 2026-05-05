@@ -214,6 +214,7 @@ function mapTurnDiffSummary(checkpoint: OrchestrationCheckpointSummary): TurnDif
     source,
     isRevertable,
     isFullDiffAvailable,
+    checkpointState: checkpoint.checkpointState,
     files: checkpoint.files.map((file) => ({ ...file })),
   };
 }
@@ -371,6 +372,7 @@ function latestTurnsEqual(
     left.startedAt === right.startedAt &&
     left.completedAt === right.completedAt &&
     left.assistantMessageId === right.assistantMessageId &&
+    left.checkpointState === right.checkpointState &&
     sourceProposedPlansEqual(left.sourceProposedPlan, right.sourceProposedPlan)
   );
 }
@@ -871,6 +873,7 @@ function buildLatestTurn(params: {
   startedAt: string | null;
   completedAt: string | null;
   assistantMessageId: NonNullable<Thread["latestTurn"]>["assistantMessageId"];
+  checkpointState?: NonNullable<Thread["latestTurn"]>["checkpointState"];
   sourceProposedPlan?: Thread["pendingSourceProposedPlan"];
 }): NonNullable<Thread["latestTurn"]> {
   const resolvedPlan =
@@ -884,6 +887,9 @@ function buildLatestTurn(params: {
     startedAt: params.startedAt,
     completedAt: params.completedAt,
     assistantMessageId: params.assistantMessageId,
+    checkpointState:
+      params.checkpointState ??
+      (params.previous?.turnId === params.turnId ? params.previous.checkpointState : "not-started"),
     ...(resolvedPlan ? { sourceProposedPlan: resolvedPlan } : {}),
   };
 }
@@ -1525,6 +1531,12 @@ function applyEnvironmentOrchestrationEvent(
           files: event.payload.files,
           assistantMessageId: event.payload.assistantMessageId,
           completedAt: event.payload.completedAt,
+          checkpointState:
+            event.payload.status === "ready"
+              ? "ready"
+              : event.payload.status === "error"
+                ? "error"
+                : "unavailable",
         });
         const existing = thread.turnDiffSummaries.find(
           (entry) => entry.turnId === checkpoint.turnId,
@@ -1557,6 +1569,12 @@ function applyEnvironmentOrchestrationEvent(
                 startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
                 completedAt: thread.latestTurn?.completedAt ?? event.payload.completedAt,
                 assistantMessageId: event.payload.assistantMessageId,
+                checkpointState:
+                  event.payload.status === "ready"
+                    ? "ready"
+                    : event.payload.status === "error"
+                      ? "error"
+                      : "unavailable",
                 sourceProposedPlan: thread.pendingSourceProposedPlan,
               })
             : thread.latestTurn;
@@ -1593,6 +1611,26 @@ function applyEnvironmentOrchestrationEvent(
               : null),
           sourceProposedPlan: thread.pendingSourceProposedPlan,
         }),
+        updatedAt: event.occurredAt,
+      }));
+
+    case "thread.turn-checkpoint-capture-started":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        latestTurn:
+          thread.latestTurn?.turnId === event.payload.turnId
+            ? { ...thread.latestTurn, checkpointState: "capturing" }
+            : thread.latestTurn,
+        updatedAt: event.occurredAt,
+      }));
+
+    case "thread.turn-checkpoint-capture-failed":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        latestTurn:
+          thread.latestTurn?.turnId === event.payload.turnId
+            ? { ...thread.latestTurn, checkpointState: event.payload.checkpointState }
+            : thread.latestTurn,
         updatedAt: event.occurredAt,
       }));
 
@@ -1642,6 +1680,7 @@ function applyEnvironmentOrchestrationEvent(
                   startedAt: latestCheckpoint.completedAt,
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId ?? null,
+                  checkpointState: latestCheckpoint.checkpointState ?? "ready",
                 },
           updatedAt: event.occurredAt,
         };

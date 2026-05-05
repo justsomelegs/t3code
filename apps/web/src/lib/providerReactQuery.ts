@@ -3,6 +3,7 @@ import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffViewInput,
+  type OrchestrationTurnDiffScope,
   ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
@@ -26,7 +27,7 @@ interface TurnDiffViewQueryInput {
   turnId: TurnId | null;
   mode: "completed" | "live";
   ignoreWhitespace: boolean;
-  paths?: string[] | null;
+  scope?: OrchestrationTurnDiffScope | null;
   revisionKey?: string | null;
   enabled?: boolean;
 }
@@ -53,7 +54,7 @@ export const providerQueryKeys = {
       input.turnId,
       input.mode,
       input.ignoreWhitespace,
-      input.paths?.join("\0") ?? null,
+      input.scope ?? null,
       input.revisionKey ?? null,
     ] as const,
 };
@@ -81,7 +82,7 @@ function decodeTurnDiffViewRequest(input: TurnDiffViewQueryInput) {
     turnId: input.turnId,
     mode: input.mode,
     ignoreWhitespace: input.ignoreWhitespace,
-    ...(input.paths && input.paths.length > 0 ? { paths: input.paths } : {}),
+    ...(input.scope ? { scope: input.scope } : {}),
   });
 }
 

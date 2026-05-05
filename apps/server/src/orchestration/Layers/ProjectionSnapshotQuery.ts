@@ -8,6 +8,7 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationTurnCheckpointState,
   ProjectScript,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -78,11 +79,11 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   }),
 );
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
-const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
-  Struct.assign({
-    files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
-  }),
-);
+const ProjectionCheckpointDbRowSchema = Schema.Struct({
+  ...ProjectionCheckpoint.fields,
+  files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
+  checkpointState: OrchestrationTurnCheckpointState,
+});
 const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   threadId: ProjectionThread.fields.threadId,
   turnId: TurnId,
@@ -91,6 +92,7 @@ const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
   assistantMessageId: Schema.NullOr(MessageId),
+  checkpointState: OrchestrationTurnCheckpointState,
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
 });
@@ -155,6 +157,7 @@ function mapCheckpointSummary(
     source,
     isRevertable: isRealCheckpoint,
     isFullDiffAvailable: isRealCheckpoint,
+    checkpointState: row.checkpointState,
   };
 }
 
@@ -199,6 +202,7 @@ function mapLatestTurn(
     startedAt: row.startedAt,
     completedAt: row.completedAt,
     assistantMessageId: row.assistantMessageId,
+    checkpointState: row.checkpointState,
     ...(row.sourceProposedPlanThreadId !== null && row.sourceProposedPlanId !== null
       ? {
           sourceProposedPlan: {
@@ -440,6 +444,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_turn_count AS "checkpointTurnCount",
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "status",
+          checkpoint_capture_state AS "checkpointState",
           checkpoint_files_json AS "files",
           assistant_message_id AS "assistantMessageId",
           completed_at AS "completedAt"
@@ -462,6 +467,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           turns.started_at AS "startedAt",
           turns.completed_at AS "completedAt",
           turns.assistant_message_id AS "assistantMessageId",
+          turns.checkpoint_capture_state AS "checkpointState",
           turns.source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           turns.source_proposed_plan_id AS "sourceProposedPlanId"
         FROM projection_threads threads
@@ -486,6 +492,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           turns.started_at AS "startedAt",
           turns.completed_at AS "completedAt",
           turns.assistant_message_id AS "assistantMessageId",
+          turns.checkpoint_capture_state AS "checkpointState",
           turns.source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           turns.source_proposed_plan_id AS "sourceProposedPlanId"
         FROM projection_threads threads
@@ -727,6 +734,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           turns.started_at AS "startedAt",
           turns.completed_at AS "completedAt",
           turns.assistant_message_id AS "assistantMessageId",
+          turns.checkpoint_capture_state AS "checkpointState",
           turns.source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           turns.source_proposed_plan_id AS "sourceProposedPlanId"
         FROM projection_threads threads
@@ -750,6 +758,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_turn_count AS "checkpointTurnCount",
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "status",
+          checkpoint_capture_state AS "checkpointState",
           checkpoint_files_json AS "files",
           assistant_message_id AS "assistantMessageId",
           completed_at AS "completedAt"
@@ -950,6 +959,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   startedAt: row.startedAt,
                   completedAt: row.completedAt,
                   assistantMessageId: row.assistantMessageId,
+                  checkpointState: row.checkpointState,
                   ...(row.sourceProposedPlanThreadId !== null && row.sourceProposedPlanId !== null
                     ? {
                         sourceProposedPlan: {

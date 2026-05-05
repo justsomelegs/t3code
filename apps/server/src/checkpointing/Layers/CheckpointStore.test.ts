@@ -221,6 +221,7 @@ it.layer(TestLayer)("CheckpointStoreLive", (it) => {
           cwd: tmp,
           fromCheckpointRef,
           ignoreWhitespace: false,
+          scope: { type: "workspace" },
         });
         const afterStatus = yield* git(tmp, ["status", "--porcelain"]);
 
@@ -253,7 +254,7 @@ it.layer(TestLayer)("CheckpointStoreLive", (it) => {
           cwd: tmp,
           fromCheckpointRef,
           ignoreWhitespace: false,
-          paths: ["README.md"],
+          scope: { type: "file", path: "README.md" },
         });
 
         expect(result.diff).toContain("diff --git a/README.md b/README.md");

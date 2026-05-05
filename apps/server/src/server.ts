@@ -26,6 +26,7 @@ import { OpenCodeRuntimeLive } from "./provider/opencodeRuntime.ts";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery.ts";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore.ts";
 import { TurnDiffServiceLive } from "./checkpointing/Layers/TurnDiffService.ts";
+import { WorkspaceDiffSnapshotServiceLive } from "./checkpointing/Layers/WorkspaceDiffSnapshotService.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "./sourceControl/GitHubCli.ts";
@@ -205,10 +206,25 @@ const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(VcsStatusBroadcaster.layer.pipe(Layer.provide(GitWorkflowLayerLive))),
 );
 
+const CheckpointStoreLayerLive = CheckpointStoreLive.pipe(
+  Layer.provide(VcsDriverRegistryLayerLive),
+);
+const CheckpointDiffQueryLayerLive = CheckpointDiffQueryLive.pipe(
+  Layer.provide(CheckpointStoreLayerLive),
+);
+const WorkspaceDiffSnapshotLayerLive = WorkspaceDiffSnapshotServiceLive.pipe(
+  Layer.provide(CheckpointStoreLayerLive),
+);
+const TurnDiffServiceLayerLive = TurnDiffServiceLive.pipe(
+  Layer.provide(WorkspaceDiffSnapshotLayerLive),
+  Layer.provide(CheckpointStoreLayerLive),
+);
+
 const CheckpointingLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(CheckpointDiffQueryLive),
-  Layer.provideMerge(TurnDiffServiceLive),
-  Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(VcsDriverRegistryLayerLive))),
+  Layer.provideMerge(CheckpointStoreLayerLive),
+  Layer.provideMerge(CheckpointDiffQueryLayerLive),
+  Layer.provideMerge(WorkspaceDiffSnapshotLayerLive),
+  Layer.provideMerge(TurnDiffServiceLayerLive),
 );
 
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));

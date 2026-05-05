@@ -24,6 +24,8 @@ export function deriveOrchestrationBatchEffects(
     switch (event.type) {
       case "thread.turn-diff-completed":
       case "thread.turn-state-set":
+      case "thread.turn-checkpoint-capture-started":
+      case "thread.turn-checkpoint-capture-failed":
       case "thread.reverted": {
         needsProviderInvalidation = true;
         break;

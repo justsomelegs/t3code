@@ -25,18 +25,21 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadTurnCheckpointCaptureFailedPayload,
+  ThreadTurnCheckpointCaptureStartedPayload,
   ThreadTurnStateSetPayload,
 } from "./Schemas.ts";
+import {
+  checkpointStatusToCaptureState,
+  checkpointStatusToLatestTurnState,
+  classifyCheckpointRef,
+  reduceLatestTurnState,
+  withLatestTurnCheckpointState,
+} from "./projectionRules.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
-
-function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
-  if (status === "error") return "error" as const;
-  if (status === "missing") return "interrupted" as const;
-  return "completed" as const;
-}
 
 function updateThread(
   threads: ReadonlyArray<OrchestrationThread>,
@@ -523,16 +526,15 @@ export function projectEvent(
             files: payload.files,
             assistantMessageId: payload.assistantMessageId,
             completedAt: payload.completedAt,
+            checkpointState: checkpointStatusToCaptureState(payload.status),
+            ...classifyCheckpointRef(payload.checkpointRef),
           },
           event.type,
           "checkpoint",
         );
 
-        // Do not let a placeholder (status "missing") overwrite a checkpoint
-        // that has already been captured with a real git ref (status "ready").
-        // ProviderRuntimeIngestion may fire multiple turn.diff.updated events
-        // per turn; without this guard later placeholders would clobber the
-        // real capture dispatched by CheckpointReactor.
+        // Legacy placeholder/provider-diff events may still appear in persisted
+        // streams. They must not replace a real filesystem checkpoint.
         const existing = thread.checkpoints.find((entry) => entry.turnId === checkpoint.turnId);
         if (existing && existing.status !== "missing" && checkpoint.status === "missing") {
           return nextBase;
@@ -556,6 +558,7 @@ export function projectEvent(
               startedAt: payload.completedAt,
               completedAt: payload.completedAt,
               assistantMessageId: payload.assistantMessageId,
+              checkpointState: checkpointStatusToCaptureState(payload.status),
             },
             updatedAt: event.occurredAt,
           }),
@@ -578,26 +581,62 @@ export function projectEvent(
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
-            latestTurn: {
+            latestTurn: reduceLatestTurnState({
+              previous: thread.latestTurn,
+              payload: {
+                turnId: payload.turnId,
+                state: payload.state,
+                requestedAt: payload.requestedAt,
+                startedAt: payload.startedAt,
+                completedAt: payload.completedAt,
+                assistantMessageId: payload.assistantMessageId,
+              },
+              occurredAt: event.occurredAt,
+            }),
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.turn-checkpoint-capture-started":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadTurnCheckpointCaptureStartedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            latestTurn: withLatestTurnCheckpointState({
+              latestTurn:
+                nextBase.threads.find((entry) => entry.id === payload.threadId)?.latestTurn ?? null,
               turnId: payload.turnId,
-              state: payload.state,
-              requestedAt:
-                payload.requestedAt ??
-                (thread.latestTurn?.turnId === payload.turnId
-                  ? thread.latestTurn.requestedAt
-                  : event.occurredAt),
-              startedAt:
-                payload.startedAt ??
-                (thread.latestTurn?.turnId === payload.turnId
-                  ? thread.latestTurn.startedAt
-                  : event.occurredAt),
-              completedAt: payload.completedAt ?? null,
-              assistantMessageId:
-                payload.assistantMessageId ??
-                (thread.latestTurn?.turnId === payload.turnId
-                  ? thread.latestTurn.assistantMessageId
-                  : null),
-            },
+              checkpointState: "capturing",
+            }),
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.turn-checkpoint-capture-failed":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadTurnCheckpointCaptureFailedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            latestTurn: withLatestTurnCheckpointState({
+              latestTurn:
+                nextBase.threads.find((entry) => entry.id === payload.threadId)?.latestTurn ?? null,
+              turnId: payload.turnId,
+              checkpointState: payload.checkpointState,
+            }),
             updatedAt: event.occurredAt,
           }),
         };
@@ -638,6 +677,7 @@ export function projectEvent(
                   startedAt: latestCheckpoint.completedAt,
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId,
+                  checkpointState: latestCheckpoint.checkpointState ?? "ready",
                 };
 
           return {

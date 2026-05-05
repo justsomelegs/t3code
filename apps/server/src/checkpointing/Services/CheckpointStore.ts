@@ -14,7 +14,7 @@ import { Context } from "effect";
 import type { Effect } from "effect";
 
 import type { CheckpointStoreError } from "../Errors.ts";
-import { CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef, type OrchestrationTurnDiffScope } from "@t3tools/contracts";
 
 export interface CaptureCheckpointInput {
   readonly cwd: string;
@@ -39,7 +39,7 @@ export interface DiffCheckpointToWorkspaceInput {
   readonly cwd: string;
   readonly fromCheckpointRef: CheckpointRef;
   readonly ignoreWhitespace: boolean;
-  readonly paths?: ReadonlyArray<string>;
+  readonly scope: OrchestrationTurnDiffScope;
 }
 
 export interface DiffCheckpointToWorkspaceResult {
