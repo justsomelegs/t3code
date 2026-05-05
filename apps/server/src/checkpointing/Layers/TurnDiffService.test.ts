@@ -38,8 +38,11 @@ function makeContext(input: {
 
 function makeProjectionLayer(context: ProjectionThreadCheckpointContext) {
   return Layer.succeed(ProjectionSnapshotQuery, {
+    getCommandReadModel: () =>
+      Effect.die("TurnDiffService should not request the command read model"),
     getSnapshot: () => Effect.die("TurnDiffService should not request the full snapshot"),
     getShellSnapshot: () => Effect.die("TurnDiffService should not request the shell snapshot"),
+    getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
     getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
     getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
     getProjectShellById: () => Effect.succeed(Option.none()),
