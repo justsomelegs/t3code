@@ -8,7 +8,7 @@ import {
   type OrchestrationEvent,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
-import { Cause, Effect, Layer, Option, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Ref, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { parseTurnDiffFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
@@ -44,6 +44,7 @@ function toTurnId(value: string | undefined): TurnId | null {
 
 const isRealCheckpointRef = (checkpointRef: string) =>
   checkpointRef.startsWith("refs/t3/checkpoints/");
+const LIVE_DIFF_STATUS_REFRESH_THROTTLE_MS = 750;
 
 function sameId(left: string | null | undefined, right: string | null | undefined): boolean {
   if (left === null || left === undefined || right === null || right === undefined) {
@@ -76,6 +77,7 @@ const make = Effect.gen(function* () {
   const receiptBus = yield* RuntimeReceiptBus;
   const workspaceEntries = yield* WorkspaceEntries;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
+  const liveDiffStatusRefreshAtByThreadRef = yield* Ref.make(new Map<ThreadId, number>());
 
   const appendRevertFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -461,6 +463,40 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const refreshLocalGitStatusFromLiveDiffUpdate = Effect.fn(
+    "refreshLocalGitStatusFromLiveDiffUpdate",
+  )(function* (event: Extract<ProviderRuntimeEvent, { type: "turn.diff.updated" }>) {
+    const now = Date.now();
+    const shouldRefresh = yield* Ref.modify(liveDiffStatusRefreshAtByThreadRef, (previous) => {
+      const lastRefreshAt = previous.get(event.threadId) ?? 0;
+      if (now - lastRefreshAt < LIVE_DIFF_STATUS_REFRESH_THROTTLE_MS) {
+        return [false, previous] as const;
+      }
+      const next = new Map(previous);
+      next.set(event.threadId, now);
+      return [true, next] as const;
+    });
+    if (!shouldRefresh) {
+      return;
+    }
+
+    const sessionRuntime = yield* resolveSessionRuntimeForThread(event.threadId);
+    if (Option.isNone(sessionRuntime)) {
+      return;
+    }
+
+    yield* vcsStatusBroadcaster.refreshLocalStatus(sessionRuntime.value.cwd).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("failed to refresh local git status after live diff update", {
+          threadId: event.threadId,
+          turnId: event.turnId ?? null,
+          cwd: sessionRuntime.value.cwd,
+          detail: error.message,
+        }),
+      ),
+    );
+  });
+
   const ensurePreTurnBaselineFromDomainTurnStart = Effect.fn(
     "ensurePreTurnBaselineFromDomainTurnStart",
   )(function* (
@@ -706,6 +742,11 @@ const make = Effect.gen(function* () {
       );
       return;
     }
+
+    if (event.type === "turn.diff.updated") {
+      yield* refreshLocalGitStatusFromLiveDiffUpdate(event);
+      return;
+    }
   });
 
   const processInput = (
@@ -745,7 +786,11 @@ const make = Effect.gen(function* () {
 
     yield* Effect.forkScoped(
       Stream.runForEach(providerService.streamEvents, (event) => {
-        if (event.type !== "turn.started" && event.type !== "turn.completed") {
+        if (
+          event.type !== "turn.started" &&
+          event.type !== "turn.completed" &&
+          event.type !== "turn.diff.updated"
+        ) {
           return Effect.void;
         }
         return worker.enqueue({ source: "runtime", event });

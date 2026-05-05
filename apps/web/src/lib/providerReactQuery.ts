@@ -27,6 +27,7 @@ interface TurnDiffViewQueryInput {
   mode: "completed" | "live";
   ignoreWhitespace: boolean;
   paths?: string[] | null;
+  revisionKey?: string | null;
   enabled?: boolean;
 }
 
@@ -53,6 +54,7 @@ export const providerQueryKeys = {
       input.mode,
       input.ignoreWhitespace,
       input.paths?.join("\0") ?? null,
+      input.revisionKey ?? null,
     ] as const,
 };
 
