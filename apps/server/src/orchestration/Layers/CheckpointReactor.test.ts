@@ -652,12 +652,8 @@ describe("CheckpointReactor", () => {
       harness.engine,
       (event) =>
         event.type === "thread.turn-checkpoint-capture-started" &&
-        (
-          event as Extract<
-            OrchestrationEvent,
-            { type: "thread.turn-checkpoint-capture-started" }
-          >
-        ).payload.turnId === "turn-recovery-not-started",
+        (event as Extract<OrchestrationEvent, { type: "thread.turn-checkpoint-capture-started" }>)
+          .payload.turnId === "turn-recovery-not-started",
     );
     await waitForEvent(
       harness.engine,

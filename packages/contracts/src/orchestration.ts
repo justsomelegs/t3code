@@ -275,9 +275,6 @@ export type OrchestrationCheckpointFile = typeof OrchestrationCheckpointFile.Typ
 export const OrchestrationCheckpointStatus = Schema.Literals(["ready", "missing", "error"]);
 export type OrchestrationCheckpointStatus = typeof OrchestrationCheckpointStatus.Type;
 
-export const OrchestrationTurnDiffSource = Schema.Literal("checkpoint");
-export type OrchestrationTurnDiffSource = typeof OrchestrationTurnDiffSource.Type;
-
 export const OrchestrationTurnCheckpointState = Schema.Literals([
   "not-started",
   "capturing",
@@ -295,9 +292,6 @@ export const OrchestrationCheckpointSummary = Schema.Struct({
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
-  source: Schema.optional(OrchestrationTurnDiffSource),
-  isRevertable: Schema.optional(Schema.Boolean),
-  isFullDiffAvailable: Schema.optional(Schema.Boolean),
   checkpointState: Schema.optional(OrchestrationTurnCheckpointState),
 });
 export type OrchestrationCheckpointSummary = typeof OrchestrationCheckpointSummary.Type;

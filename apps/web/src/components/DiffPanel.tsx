@@ -40,7 +40,6 @@ import { formatShortTimestamp } from "../timestampFormat";
 import {
   buildLiveDiffCacheKey,
   buildLiveDiffScopeKey,
-  getFullDiffTurnSummaries,
   getTransientLatestTurnSummary,
   resolveCachedLiveDiffFiles,
   sortTurnDiffSummariesForDiffPanel,
@@ -250,14 +249,9 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
-  const fullDiffTurnSummaries = useMemo(
-    () => getFullDiffTurnSummaries(turnDiffSummaries),
-    [turnDiffSummaries],
-  );
   const orderedTurnDiffSummaries = useMemo(
-    () =>
-      sortTurnDiffSummariesForDiffPanel(fullDiffTurnSummaries, inferredCheckpointTurnCountByTurnId),
-    [fullDiffTurnSummaries, inferredCheckpointTurnCountByTurnId],
+    () => sortTurnDiffSummariesForDiffPanel(turnDiffSummaries, inferredCheckpointTurnCountByTurnId),
+    [turnDiffSummaries, inferredCheckpointTurnCountByTurnId],
   );
   const selectedTurnId = diffSearch.diffTurnId ?? null;
   const selectedFilePath = selectedTurnId !== null ? (diffSearch.diffFilePath ?? null) : null;

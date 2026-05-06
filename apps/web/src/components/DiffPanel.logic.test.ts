@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildLiveDiffCacheKey,
   buildLiveDiffScopeKey,
-  getFullDiffTurnSummaries,
   getTransientLatestTurnSummary,
   resolveCachedLiveDiffFiles,
   sortTurnDiffSummariesForDiffPanel,
@@ -18,28 +17,11 @@ const makeSummary = (
   files: [],
   checkpointTurnCount: 1,
   checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/thread/turn/1`),
-  isFullDiffAvailable: true,
   ...input,
 });
 
 describe("DiffPanel logic", () => {
-  it("excludes unavailable turn summaries from full-diff candidates", () => {
-    const unavailable = makeSummary({
-      turnId: TurnId.make("turn-unavailable"),
-      checkpointRef: CheckpointRef.make("unavailable:event-1"),
-      isFullDiffAvailable: false,
-    });
-    const checkpoint = makeSummary({
-      turnId: TurnId.make("turn-checkpoint"),
-      checkpointTurnCount: 2,
-      checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread/turn/2"),
-      isFullDiffAvailable: true,
-    });
-
-    expect(getFullDiffTurnSummaries([unavailable, checkpoint])).toEqual([checkpoint]);
-  });
-
-  it("orders full-diff candidates without using unavailable turn counts", () => {
+  it("orders turn summaries by descending checkpoint turn count", () => {
     const turnOne = makeSummary({
       turnId: TurnId.make("turn-1"),
       checkpointTurnCount: 1,
@@ -54,13 +36,12 @@ describe("DiffPanel logic", () => {
       turnId: TurnId.make("turn-unavailable"),
       checkpointTurnCount: 3,
       checkpointRef: CheckpointRef.make("unavailable:event-unavailable"),
-      isFullDiffAvailable: false,
     });
 
-    const fullDiffSummaries = getFullDiffTurnSummaries([turnOne, unavailable, turnTwo]);
-    const ordered = sortTurnDiffSummariesForDiffPanel(fullDiffSummaries, {});
+    const ordered = sortTurnDiffSummariesForDiffPanel([turnOne, unavailable, turnTwo], {});
 
     expect(ordered.map((summary) => summary.turnId)).toEqual([
+      TurnId.make("turn-unavailable"),
       TurnId.make("turn-2"),
       TurnId.make("turn-1"),
     ]);

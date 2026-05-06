@@ -1,10 +1,9 @@
 import {
-  OrchestrationGetTurnDiffResult,
   type OrchestrationGetFullThreadDiffInput,
   type OrchestrationGetFullThreadDiffResult,
-  type OrchestrationGetTurnDiffResult as OrchestrationGetTurnDiffResultType,
+  type OrchestrationGetTurnDiffResult,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Option } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
@@ -16,8 +15,6 @@ import {
   type CheckpointDiffQueryShape,
 } from "../Services/CheckpointDiffQuery.ts";
 
-const isTurnDiffResult = Schema.is(OrchestrationGetTurnDiffResult);
-
 const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const checkpointStore = yield* CheckpointStore;
@@ -28,18 +25,12 @@ const make = Effect.gen(function* () {
       const ignoreWhitespace = input.ignoreWhitespace ?? true;
 
       if (input.fromTurnCount === input.toTurnCount) {
-        const emptyDiff: OrchestrationGetTurnDiffResultType = {
+        const emptyDiff: OrchestrationGetTurnDiffResult = {
           threadId: input.threadId,
           fromTurnCount: input.fromTurnCount,
           toTurnCount: input.toTurnCount,
           diff: "",
         };
-        if (!isTurnDiffResult(emptyDiff)) {
-          return yield* new CheckpointInvariantError({
-            operation,
-            detail: "Computed turn diff result does not satisfy contract schema.",
-          });
-        }
         return emptyDiff;
       }
 
@@ -150,19 +141,12 @@ const make = Effect.gen(function* () {
         ignoreWhitespace,
       });
 
-      const turnDiff: OrchestrationGetTurnDiffResultType = {
+      const turnDiff: OrchestrationGetTurnDiffResult = {
         threadId: input.threadId,
         fromTurnCount: input.fromTurnCount,
         toTurnCount: input.toTurnCount,
         diff,
       };
-      if (!isTurnDiffResult(turnDiff)) {
-        return yield* new CheckpointInvariantError({
-          operation,
-          detail: "Computed turn diff result does not satisfy contract schema.",
-        });
-      }
-
       return turnDiff;
     },
   );

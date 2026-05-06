@@ -197,10 +197,6 @@ function mapProposedPlan(proposedPlan: OrchestrationProposedPlan): ProposedPlan 
 }
 
 function mapTurnDiffSummary(checkpoint: OrchestrationCheckpointSummary): TurnDiffSummary {
-  const source = checkpoint.source ?? "checkpoint";
-  const isRealCheckpoint = checkpoint.checkpointRef.startsWith("refs/t3/checkpoints/");
-  const isRevertable = checkpoint.isRevertable ?? isRealCheckpoint;
-  const isFullDiffAvailable = checkpoint.isFullDiffAvailable ?? isRealCheckpoint;
   return {
     turnId: checkpoint.turnId,
     completedAt: checkpoint.completedAt,
@@ -208,16 +204,9 @@ function mapTurnDiffSummary(checkpoint: OrchestrationCheckpointSummary): TurnDif
     assistantMessageId: checkpoint.assistantMessageId ?? undefined,
     checkpointTurnCount: checkpoint.checkpointTurnCount,
     checkpointRef: checkpoint.checkpointRef,
-    source,
-    isRevertable,
-    isFullDiffAvailable,
     checkpointState: checkpoint.checkpointState,
     files: checkpoint.files.map((file) => ({ ...file })),
   };
-}
-
-function isLegacyProviderDiffCheckpointRef(checkpointRef: string): boolean {
-  return checkpointRef.startsWith("provider-diff:");
 }
 
 function mapProject(
@@ -1523,10 +1512,13 @@ function applyEnvironmentOrchestrationEvent(
       });
 
     case "thread.turn-diff-completed":
-      if (isLegacyProviderDiffCheckpointRef(event.payload.checkpointRef)) {
-        return state;
-      }
       return updateThreadState(state, event.payload.threadId, (thread) => {
+        const checkpointState =
+          event.payload.status === "ready"
+            ? "ready"
+            : event.payload.status === "error"
+              ? "error"
+              : "unavailable";
         const checkpoint = mapTurnDiffSummary({
           turnId: event.payload.turnId,
           checkpointTurnCount: event.payload.checkpointTurnCount,
@@ -1535,12 +1527,7 @@ function applyEnvironmentOrchestrationEvent(
           files: event.payload.files,
           assistantMessageId: event.payload.assistantMessageId,
           completedAt: event.payload.completedAt,
-          checkpointState:
-            event.payload.status === "ready"
-              ? "ready"
-              : event.payload.status === "error"
-                ? "error"
-                : "unavailable",
+          checkpointState,
         });
         const existing = thread.turnDiffSummaries.find(
           (entry) => entry.turnId === checkpoint.turnId,
@@ -1573,12 +1560,7 @@ function applyEnvironmentOrchestrationEvent(
                 startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
                 completedAt: thread.latestTurn?.completedAt ?? event.payload.completedAt,
                 assistantMessageId: event.payload.assistantMessageId,
-                checkpointState:
-                  event.payload.status === "ready"
-                    ? "ready"
-                    : event.payload.status === "error"
-                      ? "error"
-                      : "unavailable",
+                checkpointState,
                 sourceProposedPlan: thread.pendingSourceProposedPlan,
               })
             : thread.latestTurn;

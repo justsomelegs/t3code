@@ -737,7 +737,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.turn-diff-completed": {
-          if (isLegacyProviderDiffCheckpoint(event.payload)) {
+          if (isLegacyProviderDiffCheckpoint(event.payload.checkpointRef)) {
             return;
           }
           const existingRow = yield* projectionThreadRepository.getById({
@@ -1277,7 +1277,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.turn-diff-completed": {
-          if (isLegacyProviderDiffCheckpoint(event.payload)) {
+          if (isLegacyProviderDiffCheckpoint(event.payload.checkpointRef)) {
             return;
           }
           const existingTurn = yield* projectionTurnRepository.getByTurnId({

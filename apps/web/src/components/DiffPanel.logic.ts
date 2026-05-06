@@ -8,12 +8,6 @@ export interface LiveDiffCacheEntry<T> {
   files: T[];
 }
 
-export function getFullDiffTurnSummaries(
-  summaries: ReadonlyArray<TurnDiffSummary>,
-): TurnDiffSummary[] {
-  return summaries.filter((summary) => summary.isFullDiffAvailable !== false);
-}
-
 export function buildLiveDiffScopeKey(selectedFilePath: string | null): string {
   return selectedFilePath === null ? "workspace" : `file:${selectedFilePath}`;
 }
@@ -77,8 +71,6 @@ export function getTransientLatestTurnSummary(input: {
     completedAt: latestTurn.completedAt ?? latestTurn.startedAt ?? latestTurn.requestedAt,
     status: latestTurn.state,
     files: [],
-    isFullDiffAvailable: true,
-    isRevertable: false,
     checkpointState: latestTurn.checkpointState,
   };
 }

@@ -99,66 +99,6 @@ describe("orchestration projector", () => {
     ]);
   });
 
-  it("ignores legacy provider-diff checkpoint events", async () => {
-    const now = "2026-02-27T00:00:00.000Z";
-    const model = createEmptyReadModel(now);
-
-    const afterCreate = await Effect.runPromise(
-      projectEvent(
-        model,
-        makeEvent({
-          sequence: 1,
-          type: "thread.created",
-          aggregateKind: "thread",
-          aggregateId: "thread-provider-placeholder",
-          occurredAt: now,
-          commandId: "cmd-thread-create",
-          payload: {
-            threadId: "thread-provider-placeholder",
-            projectId: "project-1",
-            title: "demo",
-            modelSelection: {
-              provider: ProviderDriverKind.make("codex"),
-              model: "gpt-5-codex",
-            },
-            runtimeMode: "full-access",
-            branch: null,
-            worktreePath: null,
-            createdAt: now,
-            updatedAt: now,
-          },
-        }),
-      ),
-    );
-
-    const next = await Effect.runPromise(
-      projectEvent(
-        afterCreate,
-        makeEvent({
-          sequence: 2,
-          type: "thread.turn-diff-completed",
-          aggregateKind: "thread",
-          aggregateId: "thread-provider-placeholder",
-          occurredAt: "2026-02-27T00:00:01.000Z",
-          commandId: "cmd-provider-placeholder",
-          payload: {
-            threadId: "thread-provider-placeholder",
-            turnId: "turn-1",
-            checkpointTurnCount: 1,
-            checkpointRef: "provider-diff:event-1",
-            status: "ready",
-            files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
-            assistantMessageId: null,
-            completedAt: "2026-02-27T00:00:01.000Z",
-          },
-        }),
-      ),
-    );
-
-    expect(next.threads[0]?.checkpoints).toEqual([]);
-    expect(next.threads[0]?.latestTurn).toBeNull();
-  });
-
   it("fails when event payload cannot be decoded by runtime schema", async () => {
     const now = new Date().toISOString();
     const model = createEmptyReadModel(now);

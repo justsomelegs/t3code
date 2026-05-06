@@ -1,10 +1,5 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
-import {
-  OrchestrationCheckpointSummary,
-  OrchestrationMessage,
-  OrchestrationSession,
-  OrchestrationThread,
-} from "@t3tools/contracts";
+import { OrchestrationMessage, OrchestrationThread } from "@t3tools/contracts";
 import { Effect, Schema } from "effect";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
@@ -32,7 +27,6 @@ import {
 import {
   checkpointStatusToCaptureState,
   checkpointStatusToLatestTurnState,
-  classifyCheckpointRef,
   isLegacyProviderDiffCheckpoint,
   reduceLatestTurnState,
   withLatestTurnCheckpointState,
@@ -253,30 +247,26 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const thread: OrchestrationThread = yield* decodeForEvent(
-          OrchestrationThread,
-          {
-            id: payload.threadId,
-            projectId: payload.projectId,
-            title: payload.title,
-            modelSelection: payload.modelSelection,
-            runtimeMode: payload.runtimeMode,
-            interactionMode: payload.interactionMode,
-            branch: payload.branch,
-            worktreePath: payload.worktreePath,
-            latestTurn: null,
-            createdAt: payload.createdAt,
-            updatedAt: payload.updatedAt,
-            archivedAt: null,
-            deletedAt: null,
-            messages: [],
-            activities: [],
-            checkpoints: [],
-            session: null,
-          },
-          event.type,
-          "thread",
-        );
+        const thread: OrchestrationThread = {
+          id: payload.threadId,
+          projectId: payload.projectId,
+          title: payload.title,
+          modelSelection: payload.modelSelection,
+          runtimeMode: payload.runtimeMode,
+          interactionMode: payload.interactionMode,
+          branch: payload.branch,
+          worktreePath: payload.worktreePath,
+          latestTurn: null,
+          createdAt: payload.createdAt,
+          updatedAt: payload.updatedAt,
+          archivedAt: null,
+          deletedAt: null,
+          messages: [],
+          activities: [],
+          checkpoints: [],
+          session: null,
+          proposedPlans: [],
+        };
         const existing = nextBase.threads.find((entry) => entry.id === thread.id);
         return {
           ...nextBase,
@@ -375,21 +365,16 @@ export function projectEvent(
           return nextBase;
         }
 
-        const message: OrchestrationMessage = yield* decodeForEvent(
-          OrchestrationMessage,
-          {
-            id: payload.messageId,
-            role: payload.role,
-            text: payload.text,
-            ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
-            turnId: payload.turnId,
-            streaming: payload.streaming,
-            createdAt: payload.createdAt,
-            updatedAt: payload.updatedAt,
-          },
-          event.type,
-          "message",
-        );
+        const message: OrchestrationThread["messages"][number] = {
+          id: payload.messageId,
+          role: payload.role,
+          text: payload.text,
+          ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+          turnId: payload.turnId,
+          streaming: payload.streaming,
+          createdAt: payload.createdAt,
+          updatedAt: payload.updatedAt,
+        };
 
         const existingMessage = thread.messages.find((entry) => entry.id === message.id);
         const messages = existingMessage
@@ -436,33 +421,26 @@ export function projectEvent(
           return nextBase;
         }
 
-        const session: OrchestrationSession = yield* decodeForEvent(
-          OrchestrationSession,
-          payload.session,
-          event.type,
-          "session",
-        );
-
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
-            session,
+            session: payload.session,
             latestTurn:
-              session.status === "running" && session.activeTurnId !== null
+              payload.session.status === "running" && payload.session.activeTurnId !== null
                 ? {
-                    turnId: session.activeTurnId,
+                    turnId: payload.session.activeTurnId,
                     state: "running",
                     requestedAt:
-                      thread.latestTurn?.turnId === session.activeTurnId
+                      thread.latestTurn?.turnId === payload.session.activeTurnId
                         ? thread.latestTurn.requestedAt
-                        : session.updatedAt,
+                        : payload.session.updatedAt,
                     startedAt:
-                      thread.latestTurn?.turnId === session.activeTurnId
-                        ? (thread.latestTurn.startedAt ?? session.updatedAt)
-                        : session.updatedAt,
+                      thread.latestTurn?.turnId === payload.session.activeTurnId
+                        ? (thread.latestTurn.startedAt ?? payload.session.updatedAt)
+                        : payload.session.updatedAt,
                     completedAt: null,
                     assistantMessageId:
-                      thread.latestTurn?.turnId === session.activeTurnId
+                      thread.latestTurn?.turnId === payload.session.activeTurnId
                         ? thread.latestTurn.assistantMessageId
                         : null,
                   }
@@ -516,26 +494,20 @@ export function projectEvent(
         if (!thread) {
           return nextBase;
         }
-        if (isLegacyProviderDiffCheckpoint(payload)) {
+        if (isLegacyProviderDiffCheckpoint(payload.checkpointRef)) {
           return nextBase;
         }
 
-        const checkpoint = yield* decodeForEvent(
-          OrchestrationCheckpointSummary,
-          {
-            turnId: payload.turnId,
-            checkpointTurnCount: payload.checkpointTurnCount,
-            checkpointRef: payload.checkpointRef,
-            status: payload.status,
-            files: payload.files,
-            assistantMessageId: payload.assistantMessageId,
-            completedAt: payload.completedAt,
-            checkpointState: checkpointStatusToCaptureState(payload.status),
-            ...classifyCheckpointRef(payload.checkpointRef),
-          },
-          event.type,
-          "checkpoint",
-        );
+        const checkpoint: OrchestrationThread["checkpoints"][number] = {
+          turnId: payload.turnId,
+          checkpointTurnCount: payload.checkpointTurnCount,
+          checkpointRef: payload.checkpointRef,
+          status: payload.status,
+          files: payload.files,
+          assistantMessageId: payload.assistantMessageId,
+          completedAt: payload.completedAt,
+          checkpointState: checkpointStatusToCaptureState(payload.status),
+        };
 
         // Historical missing placeholder events must not replace a real filesystem checkpoint.
         const existing = thread.checkpoints.find((entry) => entry.turnId === checkpoint.turnId);

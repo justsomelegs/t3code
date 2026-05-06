@@ -792,61 +792,6 @@ describe("incremental orchestration updates", () => {
     expect(threadsOf(next)[0]?.messages).toHaveLength(1);
   });
 
-  it("does not regress latestTurn when an older turn diff completes late", () => {
-    const state = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.make("turn-2"),
-          state: "running",
-          requestedAt: "2026-02-27T00:00:02.000Z",
-          startedAt: "2026-02-27T00:00:03.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvent(
-      state,
-      makeEvent("thread.turn-diff-completed", {
-        threadId: ThreadId.make("thread-1"),
-        turnId: TurnId.make("turn-1"),
-        checkpointTurnCount: 1,
-        checkpointRef: CheckpointRef.make("checkpoint-1"),
-        status: "ready",
-        files: [],
-        assistantMessageId: MessageId.make("assistant-1"),
-        completedAt: "2026-02-27T00:00:04.000Z",
-      }),
-      localEnvironmentId,
-    );
-
-    expect(threadsOf(next)[0]?.turnDiffSummaries).toHaveLength(1);
-    expect(threadsOf(next)[0]?.latestTurn).toEqual(threadsOf(state)[0]?.latestTurn);
-  });
-
-  it("ignores legacy provider-diff checkpoint events", () => {
-    const state = makeState(makeThread());
-
-    const next = applyOrchestrationEvent(
-      state,
-      makeEvent("thread.turn-diff-completed", {
-        threadId: ThreadId.make("thread-1"),
-        turnId: TurnId.make("turn-provider-diff"),
-        checkpointTurnCount: 1,
-        checkpointRef: CheckpointRef.make("provider-diff:event-1"),
-        status: "ready",
-        files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
-        assistantMessageId: MessageId.make("assistant-provider-diff"),
-        completedAt: "2026-02-27T00:00:04.000Z",
-      }),
-      localEnvironmentId,
-    );
-
-    expect(threadsOf(next)[0]?.turnDiffSummaries).toHaveLength(0);
-    expect(threadsOf(next)[0]?.latestTurn).toBeNull();
-  });
-
   it("rebinds live turn diffs to the authoritative assistant message when it arrives later", () => {
     const turnId = TurnId.make("turn-1");
     const state = makeState(

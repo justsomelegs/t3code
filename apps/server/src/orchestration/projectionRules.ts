@@ -7,7 +7,6 @@ import type {
 } from "@t3tools/contracts";
 
 export {
-  classifyCheckpointRef,
   isLegacyProviderDiffCheckpoint,
   isRealCheckpointRef,
 } from "../checkpointing/CheckpointRefs.ts";

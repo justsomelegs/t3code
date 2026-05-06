@@ -80,9 +80,6 @@ export interface TurnDiffSummary {
   checkpointRef?: CheckpointRef | undefined;
   assistantMessageId?: MessageId | undefined;
   checkpointTurnCount?: number | undefined;
-  source?: "checkpoint" | undefined;
-  isRevertable?: boolean | undefined;
-  isFullDiffAvailable?: boolean | undefined;
   checkpointState?: OrchestrationTurnCheckpointState | undefined;
 }
 

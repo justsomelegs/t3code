@@ -1,11 +1,10 @@
 import {
   CheckpointRef,
-  OrchestrationGetTurnDiffViewResult,
   type OrchestrationCheckpointSummary,
-  type OrchestrationGetTurnDiffViewResult as OrchestrationGetTurnDiffViewResultType,
+  type OrchestrationGetTurnDiffViewResult,
   type ThreadId,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Option } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
@@ -15,8 +14,6 @@ import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { TurnDiffService, type TurnDiffServiceShape } from "../Services/TurnDiffService.ts";
 import { WorkspaceDiffSnapshotService } from "../Services/WorkspaceDiffSnapshotService.ts";
 import { isRealCheckpointRef } from "../CheckpointRefs.ts";
-
-const isTurnDiffViewResult = Schema.is(OrchestrationGetTurnDiffViewResult);
 
 function makeRevision(input: {
   readonly mode: "completed" | "live";
@@ -181,7 +178,7 @@ const make = Effect.gen(function* () {
               );
 
       const files = viewResult.files;
-      const turnDiffView: OrchestrationGetTurnDiffViewResultType = {
+      const turnDiffView: OrchestrationGetTurnDiffViewResult = {
         threadId: input.threadId,
         turnId: input.turnId,
         mode: input.mode,
@@ -194,13 +191,6 @@ const make = Effect.gen(function* () {
         files,
         truncated: viewResult.truncated,
       };
-
-      if (!isTurnDiffViewResult(turnDiffView)) {
-        return yield* new CheckpointInvariantError({
-          operation: "TurnDiffService.getTurnDiffView",
-          detail: "Computed turn diff view does not satisfy contract schema.",
-        });
-      }
       return turnDiffView;
     },
   );
