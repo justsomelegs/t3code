@@ -37,10 +37,16 @@ import { createThreadSelectorByRef } from "../storeSelectors";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { useSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
-import { getFullDiffTurnSummaries, sortTurnDiffSummariesForDiffPanel } from "./DiffPanel.logic";
+import {
+  buildLiveDiffCacheKey,
+  buildLiveDiffScopeKey,
+  getFullDiffTurnSummaries,
+  getTransientLatestTurnSummary,
+  resolveCachedLiveDiffFiles,
+  sortTurnDiffSummariesForDiffPanel,
+} from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
-import type { TurnDiffSummary } from "../types";
 
 type DiffRenderMode = "stacked" | "split";
 type DiffThemeType = "light" | "dark";
@@ -209,6 +215,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   );
   const [lastLiveTurnFiles, setLastLiveTurnFiles] = useState<{
     turnId: TurnId;
+    cacheKey: string;
     files: LiveDiffFileRecord[];
   } | null>(null);
   const patchViewportRef = useRef<HTMLDivElement>(null);
@@ -254,26 +261,15 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   );
   const selectedTurnId = diffSearch.diffTurnId ?? null;
   const selectedFilePath = selectedTurnId !== null ? (diffSearch.diffFilePath ?? null) : null;
-  const transientLatestTurnSummary = useMemo<TurnDiffSummary | null>(() => {
-    const latestTurn = activeThread?.latestTurn;
-    if (!latestTurn) {
-      return null;
-    }
-    if (orderedTurnDiffSummaries.some((summary) => summary.turnId === latestTurn.turnId)) {
-      return null;
-    }
-    if (latestTurn.state !== "running" && selectedTurnId !== latestTurn.turnId) {
-      return null;
-    }
-    return {
-      turnId: latestTurn.turnId,
-      completedAt: latestTurn.startedAt ?? latestTurn.requestedAt,
-      status: latestTurn.state,
-      files: [],
-      isFullDiffAvailable: true,
-      isRevertable: false,
-    } satisfies TurnDiffSummary;
-  }, [activeThread?.latestTurn, orderedTurnDiffSummaries, selectedTurnId]);
+  const transientLatestTurnSummary = useMemo(
+    () =>
+      getTransientLatestTurnSummary({
+        latestTurn: activeThread?.latestTurn,
+        persistedSummaries: orderedTurnDiffSummaries,
+        selectedTurnId,
+      }),
+    [activeThread?.latestTurn, orderedTurnDiffSummaries, selectedTurnId],
+  );
   const displayedTurnDiffSummaries = useMemo(
     () =>
       transientLatestTurnSummary
@@ -362,6 +358,18 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       enabled: isGitRepo && !selectedTurn,
     }),
   );
+  const liveDiffScopeKey = useMemo(
+    () => buildLiveDiffScopeKey(selectedFilePath),
+    [selectedFilePath],
+  );
+  const liveDiffCacheKey =
+    selectedTurn !== undefined
+      ? buildLiveDiffCacheKey({
+          turnId: selectedTurn.turnId,
+          scopeKey: liveDiffScopeKey,
+          ignoreWhitespace: diffIgnoreWhitespace,
+        })
+      : null;
   const liveDiffRevisionKey = useMemo(() => {
     if (!gitStatusQuery.data) {
       return null;
@@ -420,17 +428,21 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     }
     setLastLiveTurnFiles((previous) => ({
       turnId: selectedTurn.turnId,
+      cacheKey: liveDiffCacheKey ?? previous?.cacheKey ?? "",
       files: mergeLiveDiffFiles(
-        previous?.turnId === selectedTurn.turnId ? previous.files : [],
+        previous?.turnId === selectedTurn.turnId && previous.cacheKey === liveDiffCacheKey
+          ? previous.files
+          : [],
         files,
       ),
     }));
-  }, [liveTurnDiffQuery.data?.files, selectedRunningTurn, selectedTurn]);
-  const activeLiveFiles = selectedCurrentTurn
-    ? lastLiveTurnFiles?.turnId === selectedTurn?.turnId
-      ? lastLiveTurnFiles.files
-      : null
-    : null;
+  }, [liveDiffCacheKey, liveTurnDiffQuery.data?.files, selectedRunningTurn, selectedTurn]);
+  const activeLiveFiles = resolveCachedLiveDiffFiles({
+    selectedCurrentTurn,
+    selectedTurnId: selectedTurn?.turnId ?? null,
+    cacheKey: liveDiffCacheKey,
+    cacheEntry: lastLiveTurnFiles,
+  });
   const completedTurnFiles = selectedCompletedTurn
     ? (completedTurnDiffQuery.data?.files ?? null)
     : null;

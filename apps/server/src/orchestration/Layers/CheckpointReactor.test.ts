@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 
 import {
   ProviderDriverKind,
+  type OrchestrationEvent,
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderInstanceId,
@@ -625,6 +626,59 @@ describe("CheckpointReactor", () => {
         "README.md",
       ),
     ).toBe("v2\n");
+  });
+
+  it("recovers terminal turns stuck before checkpoint capture has started", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      startReactor: false,
+    });
+    await runtime!.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.make("thread-1"), 0),
+      }),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "v3\n", "utf8");
+
+    await dispatchTurnState(harness.engine, {
+      turnId: asTurnId("turn-recovery-not-started"),
+      state: "completed",
+      commandId: "cmd-turn-state-recovery-not-started",
+    });
+    await harness.startReactor();
+
+    await waitForEvent(
+      harness.engine,
+      (event) =>
+        event.type === "thread.turn-checkpoint-capture-started" &&
+        (
+          event as Extract<
+            OrchestrationEvent,
+            { type: "thread.turn-checkpoint-capture-started" }
+          >
+        ).payload.turnId === "turn-recovery-not-started",
+    );
+    await waitForEvent(
+      harness.engine,
+      (event) =>
+        event.type === "thread.turn-diff-completed" &&
+        (event as Extract<OrchestrationEvent, { type: "thread.turn-diff-completed" }>).payload
+          .turnId === "turn-recovery-not-started",
+    );
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.latestTurn?.turnId === "turn-recovery-not-started" && entry.checkpoints.length === 1,
+    );
+    expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
+    expect(
+      gitShowFileAtRef(
+        harness.cwd,
+        checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1),
+        "README.md",
+      ),
+    ).toBe("v3\n");
   });
 
   it("does not create duplicate checkpoints for repeated terminal turn events", async () => {

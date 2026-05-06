@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId, ProviderInstanceId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, ProjectId, ThreadId, ProviderInstanceId, TurnId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -128,7 +128,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
-  it.effect("recovers only interrupted checkpoint captures", () =>
+  it.effect("recovers terminal turns whose checkpoint capture never finished", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;
       const turns = yield* ProjectionTurnRepository;
@@ -190,12 +190,29 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         checkpointCaptureState: "capturing",
         checkpointFiles: [],
       });
+      yield* turns.upsertByTurnId({
+        threadId: ThreadId.make("thread-recovery"),
+        turnId: TurnId.make("turn-already-captured"),
+        pendingMessageId: null,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "completed",
+        requestedAt: "2026-03-24T00:00:05.000Z",
+        startedAt: "2026-03-24T00:00:05.000Z",
+        completedAt: "2026-03-24T00:00:06.000Z",
+        checkpointTurnCount: 2,
+        checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-recovery/turn/2"),
+        checkpointStatus: "ready",
+        checkpointCaptureState: "capturing",
+        checkpointFiles: [],
+      });
 
       const candidates = yield* turns.listCheckpointCaptureRecoveryCandidates();
 
       assert.deepStrictEqual(
         candidates.map((candidate) => candidate.turnId),
-        [TurnId.make("turn-capturing")],
+        [TurnId.make("turn-not-started"), TurnId.make("turn-capturing")],
       );
     }),
   );

@@ -276,7 +276,11 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           ON threads.thread_id = turns.thread_id
         WHERE turns.turn_id IS NOT NULL
           AND turns.state IN ('completed', 'interrupted', 'error')
-          AND turns.checkpoint_capture_state = 'capturing'
+          AND turns.checkpoint_capture_state IN ('not-started', 'capturing')
+          AND (
+            turns.checkpoint_ref IS NULL
+            OR turns.checkpoint_ref NOT LIKE 'refs/t3/checkpoints/%'
+          )
           AND threads.deleted_at IS NULL
         ORDER BY turns.completed_at ASC, turns.requested_at ASC, turns.thread_id ASC, turns.turn_id ASC
       `,
