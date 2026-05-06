@@ -70,15 +70,16 @@ describe("TurnDiffServiceLive", () => {
     const diffCheckpointsCalls: Array<{
       readonly fromCheckpointRef: CheckpointRef;
       readonly toCheckpointRef: CheckpointRef;
+      readonly scope: unknown;
     }> = [];
     const checkpointStore: CheckpointStoreShape = {
       isGitRepository: () => Effect.succeed(true),
       captureCheckpoint: () => Effect.void,
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
-      diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef }) =>
+      diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, scope }) =>
         Effect.sync(() => {
-          diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef });
+          diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, scope });
           return [
             "diff --git a/file.txt b/file.txt",
             "index 1111111..2222222 100644",
@@ -114,11 +115,14 @@ describe("TurnDiffServiceLive", () => {
           threadId,
           turnId,
           mode: "completed",
+          scope: { type: "file", path: "file.txt" },
         });
       }).pipe(Effect.provide(layer)),
     );
 
-    expect(diffCheckpointsCalls).toEqual([{ fromCheckpointRef, toCheckpointRef }]);
+    expect(diffCheckpointsCalls).toEqual([
+      { fromCheckpointRef, toCheckpointRef, scope: { type: "file", path: "file.txt" } },
+    ]);
     expect(result.files).toMatchObject([
       {
         path: "file.txt",

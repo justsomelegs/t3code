@@ -33,6 +33,7 @@ export interface DiffCheckpointsInput {
   readonly toCheckpointRef: CheckpointRef;
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
+  readonly scope?: OrchestrationTurnDiffScope;
 }
 
 export interface DiffCheckpointToWorkspaceInput {

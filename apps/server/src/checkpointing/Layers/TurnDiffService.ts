@@ -157,6 +157,7 @@ const make = Effect.gen(function* () {
                 toCheckpointRef: toRef,
                 fallbackFromToHead: false,
                 ignoreWhitespace,
+                ...(input.scope ? { scope: input.scope } : {}),
               });
               return {
                 files: normalizeUnifiedDiffToTurnDiffFiles(diff),

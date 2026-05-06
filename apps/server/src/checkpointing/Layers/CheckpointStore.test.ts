@@ -197,6 +197,39 @@ it.layer(TestLayer)("CheckpointStoreLive", (it) => {
         expect(whitespaceIgnoredDiff).not.toContain("+          <h1>Title</h1>");
       }),
     );
+
+    it.effect("can limit completed checkpoint diffs to selected paths", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const checkpointStore = yield* CheckpointStore;
+        const threadId = ThreadId.make("thread-checkpoint-diff-paths");
+        const fromCheckpointRef = checkpointRefForThreadTurn(threadId, 0);
+        const toCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
+
+        yield* checkpointStore.captureCheckpoint({
+          cwd: tmp,
+          checkpointRef: fromCheckpointRef,
+        });
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\n\nupdated\n");
+        yield* writeTextFile(path.join(tmp, "other.txt"), "other\n");
+        yield* checkpointStore.captureCheckpoint({
+          cwd: tmp,
+          checkpointRef: toCheckpointRef,
+        });
+
+        const diff = yield* checkpointStore.diffCheckpoints({
+          cwd: tmp,
+          fromCheckpointRef,
+          toCheckpointRef,
+          ignoreWhitespace: false,
+          scope: { type: "file", path: "README.md" },
+        });
+
+        expect(diff).toContain("diff --git a/README.md b/README.md");
+        expect(diff).not.toContain("other.txt");
+      }),
+    );
   });
 
   describe("diffCheckpointToWorkspace", () => {

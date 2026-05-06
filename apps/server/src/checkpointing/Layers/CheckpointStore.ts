@@ -26,14 +26,14 @@ import { CheckpointRef } from "@t3tools/contracts";
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 const CHECKPOINT_WORKSPACE_DIFF_MAX_OUTPUT_BYTES = 5_000_000;
 
-function liveDiffScopePathspec(input: DiffCheckpointToWorkspaceInput): ReadonlyArray<string> {
-  if (input.scope.type === "workspace") {
+function diffScopePathspec(scope: DiffCheckpointToWorkspaceInput["scope"]): ReadonlyArray<string> {
+  if (scope.type === "workspace") {
     return ["."];
   }
-  if (input.scope.type === "directory" && !input.scope.path.endsWith("/")) {
-    return [`${input.scope.path}/`];
+  if (scope.type === "directory" && !scope.path.endsWith("/")) {
+    return [`${scope.path}/`];
   }
-  return [input.scope.path];
+  return [scope.path];
 }
 
 const makeCheckpointStore = Effect.gen(function* () {
@@ -282,6 +282,9 @@ const makeCheckpointStore = Effect.gen(function* () {
         ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
         fromCommitOid,
         toCommitOid,
+        ...(input.scope && input.scope.type !== "workspace"
+          ? ["--", ...diffScopePathspec(input.scope)]
+          : []),
       ];
 
       const result = yield* vcs.execute({
@@ -330,7 +333,7 @@ const makeCheckpointStore = Effect.gen(function* () {
           });
         }
 
-        const scopedPathspec = liveDiffScopePathspec(input);
+        const scopedPathspec = diffScopePathspec(input.scope);
         yield* vcs.execute({
           operation,
           cwd: input.cwd,
