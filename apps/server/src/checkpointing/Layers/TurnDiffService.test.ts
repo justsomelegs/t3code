@@ -98,7 +98,7 @@ describe("TurnDiffServiceLive", () => {
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(WorkspaceDiffSnapshotService, {
-          getLiveTurnDiff: () => Effect.succeed({ files: [], truncated: false }),
+          getLiveTurnDiff: () => Effect.succeed({ diff: "", truncated: false }),
         }),
       ),
       Layer.provideMerge(
@@ -123,14 +123,7 @@ describe("TurnDiffServiceLive", () => {
     expect(diffCheckpointsCalls).toEqual([
       { fromCheckpointRef, toCheckpointRef, scope: { type: "file", path: "file.txt" } },
     ]);
-    expect(result.files).toMatchObject([
-      {
-        path: "file.txt",
-        status: "modified",
-        additions: 1,
-        deletions: 1,
-      },
-    ]);
+    expect(result.diff).toContain("diff --git a/file.txt b/file.txt");
     expect(result.mode).toBe("completed");
   });
 
@@ -159,24 +152,15 @@ describe("TurnDiffServiceLive", () => {
             Effect.sync(() => {
               liveCalls.push({ fromCheckpointRef, scope });
               return {
-                files: [
-                  {
-                    path: "live.txt",
-                    status: "added" as const,
-                    patch: [
-                      "diff --git a/live.txt b/live.txt",
-                      "new file mode 100644",
-                      "index 0000000..2222222",
-                      "--- /dev/null",
-                      "+++ b/live.txt",
-                      "@@ -0,0 +1 @@",
-                      "+live",
-                    ].join("\n"),
-                    additions: 1,
-                    deletions: 0,
-                    hash: "hash-live",
-                  },
-                ],
+                diff: [
+                  "diff --git a/live.txt b/live.txt",
+                  "new file mode 100644",
+                  "index 0000000..2222222",
+                  "--- /dev/null",
+                  "+++ b/live.txt",
+                  "@@ -0,0 +1 @@",
+                  "+live",
+                ].join("\n"),
                 truncated: false,
               };
             }),
@@ -209,14 +193,7 @@ describe("TurnDiffServiceLive", () => {
     expect(liveCalls).toEqual([
       { fromCheckpointRef: baselineCheckpointRef, scope: { type: "file", path: "live.txt" } },
     ]);
-    expect(result.files).toMatchObject([
-      {
-        path: "live.txt",
-        status: "added",
-        additions: 1,
-        deletions: 0,
-      },
-    ]);
+    expect(result.diff).toContain("diff --git a/live.txt b/live.txt");
     expect(result.mode).toBe("live");
   });
 
@@ -285,7 +262,7 @@ describe("TurnDiffServiceLive", () => {
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(WorkspaceDiffSnapshotService, {
-          getLiveTurnDiff: () => Effect.succeed({ files: [], truncated: false }),
+          getLiveTurnDiff: () => Effect.succeed({ diff: "", truncated: false }),
         }),
       ),
       Layer.provideMerge(

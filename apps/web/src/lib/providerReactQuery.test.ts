@@ -38,7 +38,7 @@ describe("turnDiffViewQueryOptions", () => {
       turnId,
       mode: "live",
       revision: "revision-1",
-      files: [],
+      diff: "",
       truncated: false,
     });
     const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });

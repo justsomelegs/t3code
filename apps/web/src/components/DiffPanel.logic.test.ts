@@ -5,7 +5,7 @@ import {
   buildLiveDiffCacheKey,
   buildLiveDiffScopeKey,
   getTransientLatestTurnSummary,
-  resolveCachedLiveDiffFiles,
+  resolveCachedLiveDiffValue,
   sortTurnDiffSummariesForDiffPanel,
 } from "./DiffPanel.logic";
 import type { TurnDiffSummary } from "../types";
@@ -47,7 +47,7 @@ describe("DiffPanel logic", () => {
     ]);
   });
 
-  it("invalidates cached live diff files when the selected scope changes", () => {
+  it("invalidates cached live diff values when the selected scope changes", () => {
     const turnId = TurnId.make("turn-live");
     const workspaceKey = buildLiveDiffCacheKey({
       turnId,
@@ -61,14 +61,14 @@ describe("DiffPanel logic", () => {
     });
 
     expect(
-      resolveCachedLiveDiffFiles({
+      resolveCachedLiveDiffValue({
         selectedCurrentTurn: true,
         selectedTurnId: turnId,
         cacheKey: fileKey,
         cacheEntry: {
           turnId,
           cacheKey: workspaceKey,
-          files: [{ path: "README.md" }],
+          value: "diff --git a/README.md b/README.md",
         },
       }),
     ).toBeNull();

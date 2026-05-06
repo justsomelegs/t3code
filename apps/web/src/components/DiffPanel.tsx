@@ -3,7 +3,7 @@ import { FileDiff, type FileDiffMetadata, Virtualizer } from "@pierre/diffs/reac
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { scopeThreadRef } from "@t3tools/client-runtime";
-import type { OrchestrationTurnDiffFile, TurnId } from "@t3tools/contracts";
+import type { TurnId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -41,7 +41,7 @@ import {
   buildLiveDiffCacheKey,
   buildLiveDiffScopeKey,
   getTransientLatestTurnSummary,
-  resolveCachedLiveDiffFiles,
+  resolveCachedLiveDiffValue,
   sortTurnDiffSummariesForDiffPanel,
 } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -49,7 +49,6 @@ import { ToggleGroup, Toggle } from "./ui/toggle-group";
 
 type DiffRenderMode = "stacked" | "split";
 type DiffThemeType = "light" | "dark";
-type LiveDiffFileRecord = Pick<OrchestrationTurnDiffFile, "path" | "hash" | "patch">;
 
 const DIFF_PANEL_UNSAFE_CSS = `
 [data-diffs-header],
@@ -185,17 +184,6 @@ function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string {
   }
 }
 
-function mergeLiveDiffFiles(
-  previous: ReadonlyArray<LiveDiffFileRecord>,
-  next: ReadonlyArray<LiveDiffFileRecord>,
-): LiveDiffFileRecord[] {
-  const previousByPath = new Map(previous.map((file) => [file.path, file]));
-  return next.map((file) => {
-    const existing = previousByPath.get(file.path);
-    return existing?.hash === file.hash ? existing : file;
-  });
-}
-
 interface DiffPanelProps {
   mode?: DiffPanelMode;
 }
@@ -212,10 +200,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const [collapsedDiffFileKeys, setCollapsedDiffFileKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const [lastLiveTurnFiles, setLastLiveTurnFiles] = useState<{
+  const [lastLiveTurnDiff, setLastLiveTurnDiff] = useState<{
     turnId: TurnId;
     cacheKey: string;
-    files: LiveDiffFileRecord[];
+    value: string;
   } | null>(null);
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const turnStripRef = useRef<HTMLDivElement>(null);
@@ -416,45 +404,36 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                 : null;
 
   useEffect(() => {
-    const files = liveTurnDiffQuery.data?.files;
-    if (!selectedRunningTurn || !selectedTurn || !files) {
+    const diff = liveTurnDiffQuery.data?.diff;
+    if (!selectedRunningTurn || !selectedTurn || diff === undefined) {
       return;
     }
-    setLastLiveTurnFiles((previous) => ({
+    setLastLiveTurnDiff(() => ({
       turnId: selectedTurn.turnId,
-      cacheKey: liveDiffCacheKey ?? previous?.cacheKey ?? "",
-      files: mergeLiveDiffFiles(
-        previous?.turnId === selectedTurn.turnId && previous.cacheKey === liveDiffCacheKey
-          ? previous.files
-          : [],
-        files,
-      ),
+      cacheKey: liveDiffCacheKey ?? "",
+      value: diff,
     }));
-  }, [liveDiffCacheKey, liveTurnDiffQuery.data?.files, selectedRunningTurn, selectedTurn]);
-  const activeLiveFiles = resolveCachedLiveDiffFiles({
+  }, [liveDiffCacheKey, liveTurnDiffQuery.data?.diff, selectedRunningTurn, selectedTurn]);
+  const activeLiveDiff = resolveCachedLiveDiffValue({
     selectedCurrentTurn,
     selectedTurnId: selectedTurn?.turnId ?? null,
     cacheKey: liveDiffCacheKey,
-    cacheEntry: lastLiveTurnFiles,
+    cacheEntry: lastLiveTurnDiff,
   });
-  const completedTurnFiles = selectedCompletedTurn
-    ? (completedTurnDiffQuery.data?.files ?? null)
-    : null;
-  const activeStructuredFiles = activeLiveFiles ?? completedTurnFiles;
-  const selectedPatch = selectedTurn ? undefined : conversationCheckpointDiff;
+  const selectedPatch = selectedRunningTurn
+    ? activeLiveDiff
+    : selectedCompletedTurn
+      ? (completedTurnDiffQuery.data?.diff ?? null)
+      : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
-  const hasResolvedStructuredFiles = activeStructuredFiles !== null;
-  const hasNoNetChanges =
-    activeStructuredFiles !== null
-      ? activeStructuredFiles.length === 0
-      : hasResolvedPatch && selectedPatch.trim().length === 0;
+  const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
   const isLoadingDiff = checkpointCapturePending
     ? true
     : selectedRunningTurn
-      ? liveTurnDiffQuery.isLoading || (liveTurnDiffQuery.isFetching && !hasResolvedStructuredFiles)
+      ? liveTurnDiffQuery.isLoading || (liveTurnDiffQuery.isFetching && !hasResolvedPatch)
       : selectedCompletedTurn
         ? completedTurnDiffQuery.isLoading ||
-          (completedTurnDiffQuery.isFetching && !hasResolvedStructuredFiles)
+          (completedTurnDiffQuery.isFetching && !hasResolvedPatch)
         : isLoadingCheckpointDiff;
   const emptyDiffMessage =
     selectedCheckpointPendingTurn && selectedCheckpointState === "unavailable"
@@ -467,13 +446,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
             ? "No net changes in this selection."
             : "No patch available for this selection.";
   const renderablePatch = useMemo(
-    () =>
-      activeStructuredFiles !== null
-        ? null
-        : getRenderablePatch(selectedPatch, `diff-panel:${resolvedTheme}`),
-    [activeStructuredFiles, resolvedTheme, selectedPatch],
+    () => getRenderablePatch(selectedPatch ?? undefined, `diff-panel:${resolvedTheme}`),
+    [resolvedTheme, selectedPatch],
   );
-  const checkpointRenderableFiles = useMemo(() => {
+  const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
       return [];
     }
@@ -484,20 +460,8 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       }),
     );
   }, [renderablePatch]);
-  const structuredRenderableFiles = useMemo(() => {
-    if (activeStructuredFiles === null) {
-      return [];
-    }
-    return activeStructuredFiles.flatMap((file) => {
-      const renderable = getRenderablePatch(file.patch, `diff-panel:${resolvedTheme}:${file.hash}`);
-      return renderable?.kind === "files" ? renderable.files : [];
-    });
-  }, [activeStructuredFiles, resolvedTheme]);
-  const renderableFiles =
-    activeStructuredFiles !== null ? structuredRenderableFiles : checkpointRenderableFiles;
   const hasRenderableFileDiffs = renderableFiles.length > 0;
-  const rawRenderablePatch =
-    activeStructuredFiles === null && renderablePatch?.kind === "raw" ? renderablePatch : null;
+  const rawRenderablePatch = renderablePatch?.kind === "raw" ? renderablePatch : null;
   const hasRenderableContent = hasRenderableFileDiffs || rawRenderablePatch !== null;
 
   useEffect(() => {

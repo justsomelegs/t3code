@@ -55,7 +55,7 @@ describe("WorkspaceDiffSnapshotServiceLive", () => {
     );
 
     expect(calls).toBe(1);
-    expect(left.files).toEqual(right.files);
-    expect(left.files[0]).toMatchObject({ path: "live.txt", additions: 1, deletions: 1 });
+    expect(left.diff).toEqual(right.diff);
+    expect(left.diff).toContain("diff --git a/live.txt b/live.txt");
   });
 });

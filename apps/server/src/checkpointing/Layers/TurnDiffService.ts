@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   CheckpointRef,
   type OrchestrationCheckpointSummary,
@@ -8,7 +10,6 @@ import { Effect, Layer, Option } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
-import { normalizeUnifiedDiffToTurnDiffFiles } from "../Diffs.ts";
 import { checkpointRefForThreadTurn } from "../Utils.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { TurnDiffService, type TurnDiffServiceShape } from "../Services/TurnDiffService.ts";
@@ -19,14 +20,18 @@ function makeRevision(input: {
   readonly mode: "completed" | "live";
   readonly fromCheckpointRef: CheckpointRef;
   readonly toCheckpointRef?: CheckpointRef;
-  readonly filesHash: string;
+  readonly diffHash: string;
 }) {
   return [
     input.mode,
     input.fromCheckpointRef,
     input.toCheckpointRef ?? "workspace",
-    input.filesHash,
+    input.diffHash,
   ].join(":");
+}
+
+function hashDiff(diff: string): string {
+  return createHash("sha256").update(diff).digest("hex");
 }
 
 function previousRealCheckpointBefore(
@@ -157,7 +162,7 @@ const make = Effect.gen(function* () {
                 ...(input.scope ? { scope: input.scope } : {}),
               });
               return {
-                files: normalizeUnifiedDiffToTurnDiffFiles(diff),
+                diff,
                 truncated: false,
                 toCheckpointRef: toRef,
               };
@@ -171,13 +176,12 @@ const make = Effect.gen(function* () {
               })
               .pipe(
                 Effect.map((result) => ({
-                  files: result.files,
+                  diff: result.diff,
                   truncated: result.truncated,
                   toCheckpointRef: undefined,
                 })),
               );
 
-      const files = viewResult.files;
       const turnDiffView: OrchestrationGetTurnDiffViewResult = {
         threadId: input.threadId,
         turnId: input.turnId,
@@ -186,9 +190,9 @@ const make = Effect.gen(function* () {
           mode: input.mode,
           fromCheckpointRef: fromRef,
           ...(viewResult.toCheckpointRef ? { toCheckpointRef: viewResult.toCheckpointRef } : {}),
-          filesHash: files.map((file) => file.hash).join(".") || "empty",
+          diffHash: hashDiff(viewResult.diff),
         }),
-        files,
+        diff: viewResult.diff,
         truncated: viewResult.truncated,
       };
       return turnDiffView;

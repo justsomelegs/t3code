@@ -5,7 +5,7 @@ import type { TurnDiffSummary } from "../types";
 export interface LiveDiffCacheEntry<T> {
   turnId: TurnId;
   cacheKey: string;
-  files: T[];
+  value: T;
 }
 
 export function buildLiveDiffScopeKey(selectedFilePath: string | null): string {
@@ -24,12 +24,12 @@ export function buildLiveDiffCacheKey(input: {
   ].join("\0");
 }
 
-export function resolveCachedLiveDiffFiles<T>(input: {
+export function resolveCachedLiveDiffValue<T>(input: {
   selectedCurrentTurn: boolean;
   selectedTurnId: TurnId | null;
   cacheKey: string | null;
   cacheEntry: LiveDiffCacheEntry<T> | null;
-}): T[] | null {
+}): T | null {
   if (
     !input.selectedCurrentTurn ||
     input.selectedTurnId === null ||
@@ -40,7 +40,7 @@ export function resolveCachedLiveDiffFiles<T>(input: {
   }
   return input.cacheEntry.turnId === input.selectedTurnId &&
     input.cacheEntry.cacheKey === input.cacheKey
-    ? input.cacheEntry.files
+    ? input.cacheEntry.value
     : null;
 }
 

@@ -1,8 +1,4 @@
-import type {
-  CheckpointRef,
-  OrchestrationTurnDiffScope,
-  OrchestrationTurnDiffFile,
-} from "@t3tools/contracts";
+import type { CheckpointRef, OrchestrationTurnDiffScope } from "@t3tools/contracts";
 import { Context } from "effect";
 import type { Effect } from "effect";
 
@@ -16,7 +12,7 @@ export interface WorkspaceDiffSnapshotInput {
 }
 
 export interface WorkspaceDiffSnapshotResult {
-  readonly files: ReadonlyArray<OrchestrationTurnDiffFile>;
+  readonly diff: string;
   readonly truncated: boolean;
 }
 

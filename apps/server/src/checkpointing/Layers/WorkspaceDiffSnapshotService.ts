@@ -1,6 +1,5 @@
 import { Deferred, Effect, Layer, Ref } from "effect";
 
-import { normalizeUnifiedDiffToTurnDiffFiles } from "../Diffs.ts";
 import type { CheckpointStoreError } from "../Errors.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import {
@@ -62,7 +61,7 @@ const make = Effect.gen(function* () {
       if (cacheHit.isOwner) {
         const exit = yield* checkpointStore.diffCheckpointToWorkspace(input).pipe(
           Effect.map((result) => ({
-            files: normalizeUnifiedDiffToTurnDiffFiles(result.diff),
+            diff: result.diff,
             truncated: result.truncated,
           })),
           Effect.exit,
