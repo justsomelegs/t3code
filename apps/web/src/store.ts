@@ -197,11 +197,8 @@ function mapProposedPlan(proposedPlan: OrchestrationProposedPlan): ProposedPlan 
 }
 
 function mapTurnDiffSummary(checkpoint: OrchestrationCheckpointSummary): TurnDiffSummary {
-  const source =
-    checkpoint.source ??
-    (checkpoint.checkpointRef.startsWith("provider-diff:") ? "legacy-provider-diff" : "checkpoint");
-  const isRealCheckpoint =
-    source === "checkpoint" && checkpoint.checkpointRef.startsWith("refs/t3/checkpoints/");
+  const source = checkpoint.source ?? "checkpoint";
+  const isRealCheckpoint = checkpoint.checkpointRef.startsWith("refs/t3/checkpoints/");
   const isRevertable = checkpoint.isRevertable ?? isRealCheckpoint;
   const isFullDiffAvailable = checkpoint.isFullDiffAvailable ?? isRealCheckpoint;
   return {

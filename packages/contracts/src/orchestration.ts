@@ -275,7 +275,7 @@ export type OrchestrationCheckpointFile = typeof OrchestrationCheckpointFile.Typ
 export const OrchestrationCheckpointStatus = Schema.Literals(["ready", "missing", "error"]);
 export type OrchestrationCheckpointStatus = typeof OrchestrationCheckpointStatus.Type;
 
-export const OrchestrationTurnDiffSource = Schema.Literals(["checkpoint", "legacy-provider-diff"]);
+export const OrchestrationTurnDiffSource = Schema.Literal("checkpoint");
 export type OrchestrationTurnDiffSource = typeof OrchestrationTurnDiffSource.Type;
 
 export const OrchestrationTurnCheckpointState = Schema.Literals([

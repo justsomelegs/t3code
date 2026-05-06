@@ -1,4 +1,10 @@
-import { CheckpointRef, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  type OrchestrationCheckpointSummary,
+  ProjectId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -17,13 +23,14 @@ function makeContext(input: {
   readonly checkpointTurnCount: number;
   readonly checkpointRef: CheckpointRef;
   readonly turnId?: TurnId;
+  readonly checkpoints?: ReadonlyArray<OrchestrationCheckpointSummary>;
 }): ProjectionThreadCheckpointContext {
   return {
     threadId: input.threadId,
     projectId: ProjectId.make("project-1"),
     workspaceRoot: "/tmp/workspace",
     worktreePath: null,
-    checkpoints: [
+    checkpoints: input.checkpoints ?? [
       {
         turnId: input.turnId ?? TurnId.make("turn-1"),
         checkpointTurnCount: input.checkpointTurnCount,
@@ -207,5 +214,105 @@ describe("TurnDiffServiceLive", () => {
       },
     ]);
     expect(result.mode).toBe("live");
+  });
+
+  it("uses the nearest previous real checkpoint for completed turn diffs after placeholder gaps", async () => {
+    const threadId = ThreadId.make("thread-gap-diff-view");
+    const targetTurnId = TurnId.make("turn-3");
+    const previousRealCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
+    const targetCheckpointRef = checkpointRefForThreadTurn(threadId, 3);
+    const diffCheckpointsCalls: Array<{
+      readonly fromCheckpointRef: CheckpointRef;
+      readonly toCheckpointRef: CheckpointRef;
+    }> = [];
+    const checkpointStore: CheckpointStoreShape = {
+      isGitRepository: () => Effect.succeed(true),
+      captureCheckpoint: () => Effect.void,
+      hasCheckpointRef: () => Effect.succeed(true),
+      restoreCheckpoint: () => Effect.succeed(true),
+      diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef }) =>
+        Effect.sync(() => {
+          diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef });
+          return [
+            "diff --git a/file.txt b/file.txt",
+            "index 1111111..2222222 100644",
+            "--- a/file.txt",
+            "+++ b/file.txt",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+          ].join("\n");
+        }),
+      diffCheckpointToWorkspace: () => Effect.succeed({ diff: "", truncated: false }),
+      deleteCheckpointRefs: () => Effect.void,
+    };
+
+    const checkpoints: ReadonlyArray<OrchestrationCheckpointSummary> = [
+      {
+        turnId: TurnId.make("turn-1"),
+        checkpointTurnCount: 1,
+        checkpointRef: previousRealCheckpointRef,
+        status: "ready",
+        files: [],
+        assistantMessageId: null,
+        completedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        turnId: TurnId.make("turn-2"),
+        checkpointTurnCount: 2,
+        checkpointRef: CheckpointRef.make("provider-diff:event-gap"),
+        status: "missing",
+        files: [],
+        assistantMessageId: null,
+        completedAt: "2026-01-01T00:01:00.000Z",
+      },
+      {
+        turnId: targetTurnId,
+        checkpointTurnCount: 3,
+        checkpointRef: targetCheckpointRef,
+        status: "ready",
+        files: [],
+        assistantMessageId: null,
+        completedAt: "2026-01-01T00:02:00.000Z",
+      },
+    ];
+
+    const layer = TurnDiffServiceLive.pipe(
+      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(
+        Layer.succeed(WorkspaceDiffSnapshotService, {
+          getLiveTurnDiff: () => Effect.succeed({ files: [], truncated: false }),
+        }),
+      ),
+      Layer.provideMerge(
+        makeProjectionLayer(
+          makeContext({
+            threadId,
+            turnId: targetTurnId,
+            checkpointTurnCount: 3,
+            checkpointRef: targetCheckpointRef,
+            checkpoints,
+          }),
+        ),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* TurnDiffService;
+        return yield* service.getTurnDiffView({
+          threadId,
+          turnId: targetTurnId,
+          mode: "completed",
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(diffCheckpointsCalls).toEqual([
+      {
+        fromCheckpointRef: previousRealCheckpointRef,
+        toCheckpointRef: targetCheckpointRef,
+      },
+    ]);
   });
 });

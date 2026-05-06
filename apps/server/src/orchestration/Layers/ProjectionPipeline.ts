@@ -48,7 +48,10 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
-import { checkpointStatusToCaptureState } from "../projectionRules.ts";
+import {
+  checkpointStatusToCaptureState,
+  isStaleProviderDiffPlaceholder,
+} from "../projectionRules.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -734,6 +737,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.turn-diff-completed": {
+          if (isStaleProviderDiffPlaceholder(event.payload)) {
+            return;
+          }
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -1271,6 +1277,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.turn-diff-completed": {
+          if (isStaleProviderDiffPlaceholder(event.payload)) {
+            return;
+          }
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,

@@ -33,6 +33,7 @@ import {
   checkpointStatusToCaptureState,
   checkpointStatusToLatestTurnState,
   classifyCheckpointRef,
+  isStaleProviderDiffPlaceholder,
   reduceLatestTurnState,
   withLatestTurnCheckpointState,
 } from "./projectionRules.ts";
@@ -515,6 +516,9 @@ export function projectEvent(
         if (!thread) {
           return nextBase;
         }
+        if (isStaleProviderDiffPlaceholder(payload)) {
+          return nextBase;
+        }
 
         const checkpoint = yield* decodeForEvent(
           OrchestrationCheckpointSummary,
@@ -533,8 +537,7 @@ export function projectEvent(
           "checkpoint",
         );
 
-        // Legacy placeholder/provider-diff events may still appear in persisted
-        // streams. They must not replace a real filesystem checkpoint.
+        // Historical missing placeholder events must not replace a real filesystem checkpoint.
         const existing = thread.checkpoints.find((entry) => entry.turnId === checkpoint.turnId);
         if (existing && existing.status !== "missing" && checkpoint.status === "missing") {
           return nextBase;

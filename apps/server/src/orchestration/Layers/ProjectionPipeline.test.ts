@@ -172,6 +172,108 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   );
 });
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-stale-provider-")))(
+  "OrchestrationProjectionPipeline stale provider placeholders",
+  (it) => {
+    it.effect("does not write stale provider-diff placeholders to projected turns", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-02-27T00:00:00.000Z";
+
+        const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+          eventStore
+            .append(event)
+            .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+        yield* appendAndProject({
+          type: "project.created",
+          eventId: EventId.make("evt-stale-provider-1"),
+          aggregateKind: "project",
+          aggregateId: ProjectId.make("project-stale-provider"),
+          occurredAt: now,
+          commandId: CommandId.make("cmd-stale-provider-1"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-stale-provider-1"),
+          metadata: {},
+          payload: {
+            projectId: ProjectId.make("project-stale-provider"),
+            title: "Project Stale Provider",
+            workspaceRoot: "/tmp/project-stale-provider",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+        yield* appendAndProject({
+          type: "thread.created",
+          eventId: EventId.make("evt-stale-provider-2"),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-stale-provider"),
+          occurredAt: now,
+          commandId: CommandId.make("cmd-stale-provider-2"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-stale-provider-2"),
+          metadata: {},
+          payload: {
+            threadId: ThreadId.make("thread-stale-provider"),
+            projectId: ProjectId.make("project-stale-provider"),
+            title: "Thread Stale Provider",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+        yield* appendAndProject({
+          type: "thread.turn-diff-completed",
+          eventId: EventId.make("evt-stale-provider-3"),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-stale-provider"),
+          occurredAt: "2026-02-27T00:00:01.000Z",
+          commandId: CommandId.make("cmd-stale-provider-3"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-stale-provider-3"),
+          metadata: {},
+          payload: {
+            threadId: ThreadId.make("thread-stale-provider"),
+            turnId: TurnId.make("turn-stale-provider"),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("provider-diff:event-stale"),
+            status: "missing",
+            files: [],
+            assistantMessageId: null,
+            completedAt: "2026-02-27T00:00:01.000Z",
+          },
+        });
+
+        const turnRows = yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count
+          FROM projection_turns
+          WHERE thread_id = 'thread-stale-provider'
+        `;
+        const threadRows = yield* sql<{ readonly latestTurnId: string | null }>`
+          SELECT latest_turn_id AS "latestTurnId"
+          FROM projection_threads
+          WHERE thread_id = 'thread-stale-provider'
+        `;
+
+        assert.strictEqual(turnRows[0]?.count, 0);
+        assert.strictEqual(threadRows[0]?.latestTurnId, null);
+      }),
+    );
+  },
+);
+
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(
   "OrchestrationProjectionPipeline",
   (it) => {

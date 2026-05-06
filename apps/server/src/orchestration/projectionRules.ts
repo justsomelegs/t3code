@@ -6,7 +6,11 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 
-export { classifyCheckpointRef, isRealCheckpointRef } from "../checkpointing/CheckpointRefs.ts";
+export {
+  classifyCheckpointRef,
+  isRealCheckpointRef,
+  isStaleProviderDiffPlaceholder,
+} from "../checkpointing/CheckpointRefs.ts";
 
 interface TurnStateSetProjectionPayload {
   readonly turnId: TurnId;

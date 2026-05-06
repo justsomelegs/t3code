@@ -32,13 +32,24 @@ function makeRevision(input: {
   ].join(":");
 }
 
-function checkpointForTurnCount(
+function previousRealCheckpointBefore(
   checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>,
   turnCount: number,
-): CheckpointRef | undefined {
-  return turnCount === 0
-    ? undefined
-    : checkpoints.find((checkpoint) => checkpoint.checkpointTurnCount === turnCount)?.checkpointRef;
+): OrchestrationCheckpointSummary | undefined {
+  return checkpoints
+    .filter(
+      (checkpoint) =>
+        checkpoint.checkpointTurnCount < turnCount && isRealCheckpointRef(checkpoint.checkpointRef),
+    )
+    .toSorted((left, right) => right.checkpointTurnCount - left.checkpointTurnCount)[0];
+}
+
+function latestRealCheckpoint(
+  checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>,
+): OrchestrationCheckpointSummary | undefined {
+  return checkpoints
+    .filter((checkpoint) => isRealCheckpointRef(checkpoint.checkpointRef))
+    .toSorted((left, right) => right.checkpointTurnCount - left.checkpointTurnCount)[0];
 }
 
 const make = Effect.gen(function* () {
@@ -110,17 +121,13 @@ const make = Effect.gen(function* () {
         (checkpoint) => checkpoint.turnId === input.turnId,
       );
 
-      const baselineTurnCount =
+      const baselineCheckpoint =
         input.mode === "completed" && targetCheckpoint
-          ? Math.max(0, targetCheckpoint.checkpointTurnCount - 1)
-          : context.checkpoints.reduce(
-              (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
-              0,
-            );
+          ? previousRealCheckpointBefore(context.checkpoints, targetCheckpoint.checkpointTurnCount)
+          : latestRealCheckpoint(context.checkpoints);
+      const baselineTurnCount = baselineCheckpoint?.checkpointTurnCount ?? 0;
       const fromCheckpointRef =
-        baselineTurnCount === 0
-          ? checkpointRefForThreadTurn(input.threadId, 0)
-          : checkpointForTurnCount(context.checkpoints, baselineTurnCount);
+        baselineCheckpoint?.checkpointRef ?? checkpointRefForThreadTurn(input.threadId, 0);
       const fromRef = yield* requireRealCheckpoint({
         checkpointRef: fromCheckpointRef,
         threadId: input.threadId,
