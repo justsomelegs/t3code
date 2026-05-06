@@ -9,6 +9,7 @@ import {
   DeleteProjectionTurnsByThreadInput,
   GetProjectionPendingTurnStartInput,
   GetProjectionTurnByTurnIdInput,
+  ListCheckpointCaptureRecoveryCandidatesInput,
   ListProjectionTurnsByThreadInput,
   ProjectionPendingTurnStart,
   ProjectionTurn,
@@ -249,6 +250,38 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const listCheckpointCaptureRecoveryCandidateRows = SqlSchema.findAll({
+    Request: ListCheckpointCaptureRecoveryCandidatesInput,
+    Result: ProjectionTurnByIdDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          turns.thread_id AS "threadId",
+          turns.turn_id AS "turnId",
+          turns.pending_message_id AS "pendingMessageId",
+          turns.source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
+          turns.source_proposed_plan_id AS "sourceProposedPlanId",
+          turns.assistant_message_id AS "assistantMessageId",
+          turns.state,
+          turns.requested_at AS "requestedAt",
+          turns.started_at AS "startedAt",
+          turns.completed_at AS "completedAt",
+          turns.checkpoint_turn_count AS "checkpointTurnCount",
+          turns.checkpoint_ref AS "checkpointRef",
+          turns.checkpoint_status AS "checkpointStatus",
+          turns.checkpoint_capture_state AS "checkpointCaptureState",
+          turns.checkpoint_files_json AS "checkpointFiles"
+        FROM projection_turns turns
+        INNER JOIN projection_threads threads
+          ON threads.thread_id = turns.thread_id
+        WHERE turns.turn_id IS NOT NULL
+          AND turns.state IN ('completed', 'interrupted', 'error')
+          AND turns.checkpoint_capture_state IN ('not-started', 'capturing')
+          AND threads.deleted_at IS NULL
+        ORDER BY turns.completed_at ASC, turns.requested_at ASC, turns.thread_id ASC, turns.turn_id ASC
+      `,
+  });
+
   const deleteProjectionTurnsByThread = SqlSchema.void({
     Request: DeleteProjectionTurnsByThreadInput,
     execute: ({ threadId }) =>
@@ -336,6 +369,18 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         ),
       );
 
+  const listCheckpointCaptureRecoveryCandidates: ProjectionTurnRepositoryShape["listCheckpointCaptureRecoveryCandidates"] =
+    (input = {}) =>
+      listCheckpointCaptureRecoveryCandidateRows(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionTurnRepository.listCheckpointCaptureRecoveryCandidates:query",
+            "ProjectionTurnRepository.listCheckpointCaptureRecoveryCandidates:decodeRows",
+          ),
+        ),
+        Effect.map((rows) => rows as ReadonlyArray<Schema.Schema.Type<typeof ProjectionTurnById>>),
+      );
+
   const deleteByThreadId: ProjectionTurnRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionTurnsByThread(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionTurnRepository.deleteByThreadId:query")),
@@ -349,6 +394,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     listByThreadId,
     getByTurnId,
     clearCheckpointTurnConflict,
+    listCheckpointCaptureRecoveryCandidates,
     deleteByThreadId,
   } satisfies ProjectionTurnRepositoryShape;
 });

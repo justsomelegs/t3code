@@ -299,10 +299,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const selectedCurrentTurn = selectedRunningTurn || selectedCheckpointPendingTurn;
   const selectedCompletedTurn = selectedTurn && !selectedCurrentTurn ? selectedTurn : null;
   const checkpointCapturePending =
-    selectedCheckpointPendingTurn &&
-    (activeThread?.latestTurn?.checkpointState === undefined ||
-      activeThread.latestTurn.checkpointState === "not-started" ||
-      activeThread.latestTurn.checkpointState === "capturing");
+    selectedCheckpointPendingTurn && activeThread?.latestTurn?.checkpointState === "capturing";
+  const selectedCheckpointState = selectedCheckpointPendingTurn
+    ? activeThread?.latestTurn?.checkpointState
+    : undefined;
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
@@ -450,6 +450,16 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         ? completedTurnDiffQuery.isLoading ||
           (completedTurnDiffQuery.isFetching && !hasResolvedStructuredFiles)
         : isLoadingCheckpointDiff;
+  const emptyDiffMessage =
+    selectedCheckpointPendingTurn && selectedCheckpointState === "unavailable"
+      ? "Checkpoint capture is unavailable for this turn."
+      : selectedCheckpointPendingTurn && selectedCheckpointState === "error"
+        ? "Checkpoint capture failed for this turn."
+        : selectedCheckpointPendingTurn
+          ? "Checkpoint capture has not started for this turn."
+          : hasNoNetChanges
+            ? "No net changes in this selection."
+            : "No patch available for this selection.";
   const renderablePatch = useMemo(
     () =>
       activeStructuredFiles !== null
@@ -804,11 +814,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                 />
               ) : (
                 <div className="flex h-full items-center justify-center px-3 py-2 text-xs text-muted-foreground/70">
-                  <p>
-                    {hasNoNetChanges
-                      ? "No net changes in this selection."
-                      : "No patch available for this selection."}
-                  </p>
+                  <p>{emptyDiffMessage}</p>
                 </div>
               )
             ) : hasRenderableFileDiffs ? (

@@ -107,6 +107,10 @@ export const ClearCheckpointTurnConflictInput = Schema.Struct({
 });
 export type ClearCheckpointTurnConflictInput = typeof ClearCheckpointTurnConflictInput.Type;
 
+export const ListCheckpointCaptureRecoveryCandidatesInput = Schema.Struct({});
+export type ListCheckpointCaptureRecoveryCandidatesInput =
+  typeof ListCheckpointCaptureRecoveryCandidatesInput.Type;
+
 export interface ProjectionTurnRepositoryShape {
   /**
    * Inserts or updates the canonical row for a concrete `{threadId, turnId}` turn lifecycle state.
@@ -156,6 +160,16 @@ export interface ProjectionTurnRepositoryShape {
   readonly clearCheckpointTurnConflict: (
     input: ClearCheckpointTurnConflictInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Lists terminal turn rows whose checkpoint capture never reached a final state.
+   *
+   * Used by checkpoint recovery on startup to retry captures that may have been
+   * interrupted by a process restart after the terminal turn event was persisted.
+   */
+  readonly listCheckpointCaptureRecoveryCandidates: (
+    input?: ListCheckpointCaptureRecoveryCandidatesInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectionTurnById>, ProjectionRepositoryError>;
 
   /**
    * Hard-deletes all projection rows for a thread, including pending-start placeholders and checkpoint metadata rows.

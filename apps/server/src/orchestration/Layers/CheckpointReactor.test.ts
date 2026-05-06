@@ -270,6 +270,7 @@ describe("CheckpointReactor", () => {
     readonly providerSessionCwd?: string;
     readonly providerName?: ProviderDriverKind;
     readonly gitStatusRefreshCalls?: Array<string>;
+    readonly startReactor?: boolean;
   }) {
     const cwd = createGitRepository();
     tempDirs.push(cwd);
@@ -331,6 +332,7 @@ describe("CheckpointReactor", () => {
       Layer.provideMerge(VcsProcess.layer),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(SqlitePersistenceMemory),
     );
 
     runtime = ManagedRuntime.make(layer);
@@ -339,7 +341,10 @@ describe("CheckpointReactor", () => {
     const reactor = await runtime.runPromise(Effect.service(CheckpointReactor));
     const checkpointStore = await runtime.runPromise(Effect.service(CheckpointStore));
     scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
+    const startReactor = () => Effect.runPromise(reactor.start().pipe(Scope.provide(scope!)));
+    if (options?.startReactor ?? true) {
+      await startReactor();
+    }
     const drain = () => Effect.runPromise(reactor.drain);
 
     const createdAt = new Date().toISOString();
@@ -404,8 +409,34 @@ describe("CheckpointReactor", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       provider,
       cwd,
+      reactor,
+      checkpointStore,
+      startReactor,
       drain,
     };
+  }
+
+  async function dispatchTurnState(
+    engine: OrchestrationEngineShape,
+    input: {
+      readonly turnId: TurnId;
+      readonly state?: "completed" | "interrupted" | "error";
+      readonly createdAt?: string;
+      readonly commandId?: string;
+    },
+  ) {
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    await Effect.runPromise(
+      engine.dispatch({
+        type: "thread.turn.state.set",
+        commandId: CommandId.make(input.commandId ?? `cmd-turn-state-${input.turnId}`),
+        threadId: ThreadId.make("thread-1"),
+        turnId: input.turnId,
+        state: input.state ?? "completed",
+        completedAt: createdAt,
+        createdAt,
+      }),
+    );
   }
 
   it("captures pre-turn baseline on turn.started and post-turn checkpoint on turn.completed", async () => {
@@ -455,6 +486,7 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-1"),
       payload: { state: "completed" },
     });
+    await dispatchTurnState(harness.engine, { turnId: asTurnId("turn-1") });
 
     await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
     const thread = await waitForThread(
@@ -482,6 +514,146 @@ describe("CheckpointReactor", () => {
         "README.md",
       ),
     ).toBe("v2\n");
+  });
+
+  it("captures partial workspace checkpoint for interrupted turns", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-interrupted-capture"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-interrupted"),
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.make("evt-turn-started-interrupted"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-interrupted"),
+    });
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadTurn(ThreadId.make("thread-1"), 0),
+    );
+
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "partial\n", "utf8");
+    harness.provider.emit({
+      type: "turn.aborted",
+      eventId: EventId.make("evt-turn-aborted-interrupted"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-interrupted"),
+      payload: { reason: "user interrupted" },
+    });
+    await dispatchTurnState(harness.engine, {
+      turnId: asTurnId("turn-interrupted"),
+      state: "interrupted",
+      createdAt,
+      commandId: "cmd-turn-state-interrupted",
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.latestTurn?.turnId === "turn-interrupted" && entry.checkpoints.length === 1,
+    );
+    expect(thread.latestTurn?.turnId).toBe("turn-interrupted");
+    expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
+    expect(
+      gitShowFileAtRef(
+        harness.cwd,
+        checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1),
+        "README.md",
+      ),
+    ).toBe("partial\n");
+  });
+
+  it("recovers terminal turns stuck before checkpoint capture when reactor starts", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      startReactor: false,
+    });
+    await runtime!.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.make("thread-1"), 0),
+      }),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "v2\n", "utf8");
+
+    await dispatchTurnState(harness.engine, {
+      turnId: asTurnId("turn-recovery"),
+      state: "completed",
+      commandId: "cmd-turn-state-recovery",
+    });
+    await harness.startReactor();
+
+    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.latestTurn?.turnId === "turn-recovery" && entry.checkpoints.length === 1,
+    );
+    expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
+    expect(
+      gitShowFileAtRef(
+        harness.cwd,
+        checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1),
+        "README.md",
+      ),
+    ).toBe("v2\n");
+  });
+
+  it("does not create duplicate checkpoints for repeated terminal turn events", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const createdAt = new Date().toISOString();
+    await runtime!.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.make("thread-1"), 0),
+      }),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "v2\n", "utf8");
+
+    await dispatchTurnState(harness.engine, {
+      turnId: asTurnId("turn-duplicate"),
+      state: "completed",
+      createdAt,
+      commandId: "cmd-turn-state-duplicate-1",
+    });
+    await dispatchTurnState(harness.engine, {
+      turnId: asTurnId("turn-duplicate"),
+      state: "completed",
+      createdAt,
+      commandId: "cmd-turn-state-duplicate-2",
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (entry) => entry.latestTurn?.turnId === "turn-duplicate" && entry.checkpoints.length === 1,
+    );
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.checkpoints).toHaveLength(1);
+    expect(thread?.checkpoints[0]?.checkpointTurnCount).toBe(1);
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.make("thread-1"), 2)),
+    ).toBe(false);
   });
 
   it("refreshes local git status state on turn completion using the session cwd", async () => {
@@ -570,6 +742,7 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-main"),
       payload: { state: "completed" },
     });
+    await dispatchTurnState(harness.engine, { turnId: asTurnId("turn-main") });
 
     const thread = await waitForThread(
       harness.readModel,
@@ -626,6 +799,7 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-claude-1"),
       payload: { state: "completed" },
     });
+    await dispatchTurnState(harness.engine, { turnId: asTurnId("turn-claude-1") });
 
     await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
     const thread = await waitForThread(
@@ -671,6 +845,7 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-missing-baseline"),
       payload: { state: "completed" },
     });
+    await dispatchTurnState(harness.engine, { turnId: asTurnId("turn-missing-baseline") });
 
     await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
     const thread = await waitForThread(
@@ -760,6 +935,7 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-missing-cwd"),
       payload: { state: "completed" },
     });
+    await dispatchTurnState(harness.engine, { turnId: asTurnId("turn-missing-cwd") });
 
     await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
     expect(
@@ -856,6 +1032,7 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-runtime-failure"),
       payload: { state: "completed" },
     });
+    await dispatchTurnState(harness.engine, { turnId: asTurnId("turn-runtime-failure") });
 
     harness.provider.emit({
       type: "turn.started",
