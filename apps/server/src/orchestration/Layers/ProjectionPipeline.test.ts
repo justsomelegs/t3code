@@ -173,9 +173,9 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
 });
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-stale-provider-")))(
-  "OrchestrationProjectionPipeline stale provider placeholders",
+  "OrchestrationProjectionPipeline legacy provider diffs",
   (it) => {
-    it.effect("does not write stale provider-diff placeholders to projected turns", () =>
+    it.effect("does not write provider-diff checkpoints to projected turns", () =>
       Effect.gen(function* () {
         const projectionPipeline = yield* OrchestrationProjectionPipeline;
         const eventStore = yield* OrchestrationEventStore;
@@ -249,8 +249,8 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-stal
             turnId: TurnId.make("turn-stale-provider"),
             checkpointTurnCount: 1,
             checkpointRef: CheckpointRef.make("provider-diff:event-stale"),
-            status: "missing",
-            files: [],
+            status: "ready",
+            files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
             assistantMessageId: null,
             completedAt: "2026-02-27T00:00:01.000Z",
           },

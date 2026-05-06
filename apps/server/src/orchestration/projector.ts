@@ -33,7 +33,7 @@ import {
   checkpointStatusToCaptureState,
   checkpointStatusToLatestTurnState,
   classifyCheckpointRef,
-  isStaleProviderDiffPlaceholder,
+  isLegacyProviderDiffCheckpoint,
   reduceLatestTurnState,
   withLatestTurnCheckpointState,
 } from "./projectionRules.ts";
@@ -516,7 +516,7 @@ export function projectEvent(
         if (!thread) {
           return nextBase;
         }
-        if (isStaleProviderDiffPlaceholder(payload)) {
+        if (isLegacyProviderDiffCheckpoint(payload)) {
           return nextBase;
         }
 

@@ -13,8 +13,5 @@ export default Effect.gen(function* () {
       checkpoint_capture_state = 'unavailable',
       checkpoint_files_json = '[]'
     WHERE checkpoint_ref LIKE 'provider-diff:%'
-      AND checkpoint_status = 'missing'
-      AND json_valid(checkpoint_files_json)
-      AND json_array_length(checkpoint_files_json) = 0
   `;
 });

@@ -50,7 +50,7 @@ import {
 } from "../../attachmentStore.ts";
 import {
   checkpointStatusToCaptureState,
-  isStaleProviderDiffPlaceholder,
+  isLegacyProviderDiffCheckpoint,
 } from "../projectionRules.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
@@ -737,7 +737,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.turn-diff-completed": {
-          if (isStaleProviderDiffPlaceholder(event.payload)) {
+          if (isLegacyProviderDiffCheckpoint(event.payload)) {
             return;
           }
           const existingRow = yield* projectionThreadRepository.getById({
@@ -1277,7 +1277,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.turn-diff-completed": {
-          if (isStaleProviderDiffPlaceholder(event.payload)) {
+          if (isLegacyProviderDiffCheckpoint(event.payload)) {
             return;
           }
           const existingTurn = yield* projectionTurnRepository.getByTurnId({

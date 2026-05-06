@@ -99,7 +99,7 @@ describe("orchestration projector", () => {
     ]);
   });
 
-  it("ignores stale provider-diff placeholder checkpoint events", async () => {
+  it("ignores legacy provider-diff checkpoint events", async () => {
     const now = "2026-02-27T00:00:00.000Z";
     const model = createEmptyReadModel(now);
 
@@ -146,8 +146,8 @@ describe("orchestration projector", () => {
             turnId: "turn-1",
             checkpointTurnCount: 1,
             checkpointRef: "provider-diff:event-1",
-            status: "missing",
-            files: [],
+            status: "ready",
+            files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
             assistantMessageId: null,
             completedAt: "2026-02-27T00:00:01.000Z",
           },

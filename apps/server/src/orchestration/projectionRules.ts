@@ -8,8 +8,8 @@ import type {
 
 export {
   classifyCheckpointRef,
+  isLegacyProviderDiffCheckpoint,
   isRealCheckpointRef,
-  isStaleProviderDiffPlaceholder,
 } from "../checkpointing/CheckpointRefs.ts";
 
 interface TurnStateSetProjectionPayload {

@@ -9,6 +9,10 @@ export function isRealCheckpointRef(checkpointRef: CheckpointRef | string): bool
   return checkpointRef.startsWith("refs/t3/checkpoints/");
 }
 
+export function isProviderDiffCheckpointRef(checkpointRef: CheckpointRef | string): boolean {
+  return checkpointRef.startsWith("provider-diff:");
+}
+
 export function classifyCheckpointRef(
   checkpointRef: CheckpointRef | string,
 ): Pick<OrchestrationCheckpointSummary, "source" | "isRevertable" | "isFullDiffAvailable"> {
@@ -20,14 +24,10 @@ export function classifyCheckpointRef(
   };
 }
 
-export function isStaleProviderDiffPlaceholder(input: {
+export function isLegacyProviderDiffCheckpoint(input: {
   readonly checkpointRef: CheckpointRef | string;
   readonly status: OrchestrationCheckpointStatus;
   readonly files: ReadonlyArray<OrchestrationCheckpointFile>;
 }): boolean {
-  return (
-    input.checkpointRef.startsWith("provider-diff:") &&
-    input.status === "missing" &&
-    input.files.length === 0
-  );
+  return isProviderDiffCheckpointRef(input.checkpointRef);
 }

@@ -216,6 +216,10 @@ function mapTurnDiffSummary(checkpoint: OrchestrationCheckpointSummary): TurnDif
   };
 }
 
+function isLegacyProviderDiffCheckpointRef(checkpointRef: string): boolean {
+  return checkpointRef.startsWith("provider-diff:");
+}
+
 function mapProject(
   project:
     | OrchestrationReadModel["projects"][number]
@@ -1519,6 +1523,9 @@ function applyEnvironmentOrchestrationEvent(
       });
 
     case "thread.turn-diff-completed":
+      if (isLegacyProviderDiffCheckpointRef(event.payload.checkpointRef)) {
+        return state;
+      }
       return updateThreadState(state, event.payload.threadId, (thread) => {
         const checkpoint = mapTurnDiffSummary({
           turnId: event.payload.turnId,

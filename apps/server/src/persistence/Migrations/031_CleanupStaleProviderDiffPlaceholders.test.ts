@@ -8,7 +8,7 @@ import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 layer("031_CleanupStaleProviderDiffPlaceholders", (it) => {
-  it.effect("clears only stale provider-diff checkpoint fields from projected turns", () =>
+  it.effect("clears all provider-diff checkpoint fields from projected turns", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
@@ -66,6 +66,23 @@ layer("031_CleanupStaleProviderDiffPlaceholders", (it) => {
             'ready',
             'ready',
             '[]'
+          ),
+          (
+            'thread-1',
+            'turn-provider-ready',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            'completed',
+            '2026-02-27T00:00:04.000Z',
+            '2026-02-27T00:00:04.000Z',
+            '2026-02-27T00:00:05.000Z',
+            3,
+            'provider-diff:event-ready',
+            'ready',
+            'ready',
+            '[{"path":"src/app.ts","kind":"modified","additions":1,"deletions":0}]'
           )
       `;
 
@@ -89,6 +106,13 @@ layer("031_CleanupStaleProviderDiffPlaceholders", (it) => {
       `;
 
       assert.deepStrictEqual(rows, [
+        {
+          turnId: "turn-provider-ready",
+          checkpointTurnCount: null,
+          checkpointRef: null,
+          checkpointStatus: null,
+          checkpointCaptureState: "unavailable",
+        },
         {
           turnId: "turn-real",
           checkpointTurnCount: 2,
