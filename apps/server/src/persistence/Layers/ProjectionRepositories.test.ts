@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
+import { ProjectId, ThreadId, ProviderInstanceId, TurnId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -6,13 +6,16 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
+import { ProjectionTurnRepositoryLive } from "./ProjectionTurns.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
+import { ProjectionTurnRepository } from "../Services/ProjectionTurns.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionTurnRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -122,6 +125,78 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-opus-4-6",
       });
+    }),
+  );
+
+  it.effect("recovers only interrupted checkpoint captures", () =>
+    Effect.gen(function* () {
+      const threads = yield* ProjectionThreadRepository;
+      const turns = yield* ProjectionTurnRepository;
+
+      yield* threads.upsert({
+        threadId: ThreadId.make("thread-recovery"),
+        projectId: ProjectId.make("project-recovery"),
+        title: "Recovery thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurnId: TurnId.make("turn-capturing"),
+        createdAt: "2026-03-24T00:00:00.000Z",
+        updatedAt: "2026-03-24T00:00:00.000Z",
+        archivedAt: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        deletedAt: null,
+      });
+
+      yield* turns.upsertByTurnId({
+        threadId: ThreadId.make("thread-recovery"),
+        turnId: TurnId.make("turn-not-started"),
+        pendingMessageId: null,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "completed",
+        requestedAt: "2026-03-24T00:00:01.000Z",
+        startedAt: "2026-03-24T00:00:01.000Z",
+        completedAt: "2026-03-24T00:00:02.000Z",
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointCaptureState: "not-started",
+        checkpointFiles: [],
+      });
+      yield* turns.upsertByTurnId({
+        threadId: ThreadId.make("thread-recovery"),
+        turnId: TurnId.make("turn-capturing"),
+        pendingMessageId: null,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "completed",
+        requestedAt: "2026-03-24T00:00:03.000Z",
+        startedAt: "2026-03-24T00:00:03.000Z",
+        completedAt: "2026-03-24T00:00:04.000Z",
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointCaptureState: "capturing",
+        checkpointFiles: [],
+      });
+
+      const candidates = yield* turns.listCheckpointCaptureRecoveryCandidates();
+
+      assert.deepStrictEqual(
+        candidates.map((candidate) => candidate.turnId),
+        [TurnId.make("turn-capturing")],
+      );
     }),
   );
 });

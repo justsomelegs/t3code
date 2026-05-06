@@ -15,7 +15,7 @@ export default Effect.gen(function* () {
       WHEN checkpoint_status = 'ready' THEN 'ready'
       WHEN checkpoint_status = 'error' THEN 'error'
       WHEN checkpoint_status = 'missing' THEN 'unavailable'
-      ELSE 'not-started'
+      ELSE 'unavailable'
     END
   `;
 });
