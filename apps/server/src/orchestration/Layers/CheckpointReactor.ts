@@ -233,11 +233,25 @@ const make = Effect.gen(function* () {
       checkpointRef: fromCheckpointRef,
     });
     if (!fromCheckpointExists) {
+      const detail = `Baseline checkpoint ${fromTurnCount} is unavailable for turn checkpoint capture.`;
       yield* Effect.logWarning("checkpoint capture missing pre-turn baseline", {
         threadId: input.threadId,
         turnId: input.turnId,
         fromTurnCount,
       });
+      yield* dispatchCheckpointCaptureUnavailable({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        message: detail,
+        createdAt: input.createdAt,
+      });
+      yield* appendCaptureFailureActivity({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        detail,
+        createdAt: input.createdAt,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
     }
 
     const targetCheckpointExists = yield* checkpointStore.hasCheckpointRef({

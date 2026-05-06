@@ -601,6 +601,15 @@ describe("CheckpointReactor", () => {
       state: "completed",
       commandId: "cmd-turn-state-recovery",
     });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.checkpoint-capture.start",
+        commandId: CommandId.make("cmd-turn-recovery-capture-start"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-recovery"),
+        createdAt: new Date().toISOString(),
+      }),
+    );
     await harness.startReactor();
 
     await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
@@ -813,7 +822,7 @@ describe("CheckpointReactor", () => {
     ).toBe(true);
   });
 
-  it("appends capture failure activity when turn diff summary cannot be derived", async () => {
+  it("marks checkpoint unavailable and skips terminal capture when pre-turn baseline is missing", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = new Date().toISOString();
 
@@ -847,18 +856,23 @@ describe("CheckpointReactor", () => {
     });
     await dispatchTurnState(harness.engine, { turnId: asTurnId("turn-missing-baseline") });
 
-    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) =>
-        entry.checkpoints.length === 1 &&
-        entry.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    const events = await waitForEvent(
+      harness.engine,
+      (event) => event.type === "thread.turn-checkpoint-capture-failed",
     );
+    await harness.drain();
+    const snapshot = await harness.readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
 
-    expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
+    expect(events.some((event) => event.type === "thread.turn-diff-completed")).toBe(false);
+    expect(thread?.checkpoints).toHaveLength(0);
+    expect(thread?.latestTurn?.checkpointState).toBe("unavailable");
     expect(
-      thread.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+      thread?.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
     ).toBe(true);
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1)),
+    ).toBe(false);
   });
 
   it("captures pre-turn baseline from project workspace root when thread worktree is unset", async () => {
@@ -905,6 +919,12 @@ describe("CheckpointReactor", () => {
       threadWorktreePath: null,
     });
     const createdAt = new Date().toISOString();
+    await runtime!.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.make("thread-1"), 0),
+      }),
+    );
 
     await Effect.runPromise(
       harness.engine.dispatch({
