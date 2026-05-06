@@ -48,10 +48,8 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
-import {
-  checkpointStatusToCaptureState,
-  isLegacyProviderDiffCheckpoint,
-} from "../projectionRules.ts";
+import { checkpointStatusToCaptureState } from "@t3tools/shared/orchestrationLatestTurn";
+import { isLegacyProviderDiffCheckpoint } from "../../checkpointing/CheckpointRefs.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",

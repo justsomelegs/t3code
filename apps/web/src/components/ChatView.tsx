@@ -61,6 +61,7 @@ import {
   deriveWorkLogEntries,
   hasActionableProposedPlan,
   hasToolActivityForTurn,
+  inferCheckpointTurnCountByTurnId,
   isLatestTurnSettled,
   formatElapsed,
 } from "../session-logic";
@@ -95,7 +96,6 @@ import {
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
-import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -1561,8 +1561,14 @@ export default function ChatView(props: ChatViewProps) {
       deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
     [activeThread?.proposedPlans, timelineMessages, workLogEntries],
   );
-  const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
-    useTurnDiffSummaries(activeThread);
+  const turnDiffSummaries = useMemo(
+    () => activeThread?.turnDiffSummaries ?? [],
+    [activeThread?.turnDiffSummaries],
+  );
+  const inferredCheckpointTurnCountByTurnId = useMemo(
+    () => inferCheckpointTurnCountByTurnId(turnDiffSummaries),
+    [turnDiffSummaries],
+  );
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, TurnDiffSummary>();
     for (const summary of turnDiffSummaries) {

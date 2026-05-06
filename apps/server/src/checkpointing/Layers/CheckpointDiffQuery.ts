@@ -3,11 +3,14 @@ import {
   type OrchestrationGetFullThreadDiffResult,
   type OrchestrationGetTurnDiffResult,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
-import { isRealCheckpointRef } from "../CheckpointRefs.ts";
+import { CheckpointUnavailableError } from "../Errors.ts";
+import {
+  requireRealCheckpointRef,
+  resolveThreadCheckpointContext,
+} from "../CheckpointResolution.ts";
 import { checkpointRefForThreadTurn } from "../Utils.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import {
@@ -34,17 +37,13 @@ const make = Effect.gen(function* () {
         return emptyDiff;
       }
 
-      const threadContext = yield* projectionSnapshotQuery.getThreadCheckpointContext(
-        input.threadId,
-      );
-      if (Option.isNone(threadContext)) {
-        return yield* new CheckpointInvariantError({
-          operation,
-          detail: `Thread '${input.threadId}' not found.`,
-        });
-      }
+      const threadContext = yield* resolveThreadCheckpointContext({
+        projectionSnapshotQuery,
+        threadId: input.threadId,
+        operation,
+      });
 
-      const maxTurnCount = threadContext.value.checkpoints.reduce(
+      const maxTurnCount = threadContext.checkpoints.reduce(
         (max, checkpoint) => Math.max(max, checkpoint.checkpointTurnCount),
         0,
       );
@@ -56,87 +55,39 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const workspaceCwd = threadContext.value.worktreePath ?? threadContext.value.workspaceRoot;
-      if (!workspaceCwd) {
-        return yield* new CheckpointInvariantError({
-          operation,
-          detail: `Workspace path missing for thread '${input.threadId}' when computing turn diff.`,
-        });
-      }
-
       const fromCheckpointRef =
         input.fromTurnCount === 0
           ? checkpointRefForThreadTurn(input.threadId, 0)
-          : threadContext.value.checkpoints.find(
+          : threadContext.checkpoints.find(
               (checkpoint) => checkpoint.checkpointTurnCount === input.fromTurnCount,
             )?.checkpointRef;
-      if (!fromCheckpointRef) {
-        return yield* new CheckpointUnavailableError({
-          threadId: input.threadId,
-          turnCount: input.fromTurnCount,
-          detail: `Checkpoint ref is unavailable for turn ${input.fromTurnCount}.`,
-        });
-      }
-      if (!isRealCheckpointRef(fromCheckpointRef)) {
-        return yield* new CheckpointUnavailableError({
-          threadId: input.threadId,
-          turnCount: input.fromTurnCount,
-          detail: `Turn ${input.fromTurnCount} is a legacy diff summary without a filesystem checkpoint.`,
-        });
-      }
-
-      const toCheckpointRef = threadContext.value.checkpoints.find(
+      const toCheckpointRef = threadContext.checkpoints.find(
         (checkpoint) => checkpoint.checkpointTurnCount === input.toTurnCount,
       )?.checkpointRef;
-      if (!toCheckpointRef) {
-        return yield* new CheckpointUnavailableError({
-          threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          detail: `Checkpoint ref is unavailable for turn ${input.toTurnCount}.`,
-        });
-      }
-      if (!isRealCheckpointRef(toCheckpointRef)) {
-        return yield* new CheckpointUnavailableError({
-          threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          detail: `Turn ${input.toTurnCount} is a legacy diff summary without a filesystem checkpoint.`,
-        });
-      }
-
-      const [fromExists, toExists] = yield* Effect.all(
+      const [fromRef, toRef] = yield* Effect.all(
         [
-          checkpointStore.hasCheckpointRef({
-            cwd: workspaceCwd,
+          requireRealCheckpointRef({
+            checkpointStore,
             checkpointRef: fromCheckpointRef,
+            threadId: input.threadId,
+            turnCount: input.fromTurnCount,
+            cwd: threadContext.workspaceCwd,
           }),
-          checkpointStore.hasCheckpointRef({
-            cwd: workspaceCwd,
+          requireRealCheckpointRef({
+            checkpointStore,
             checkpointRef: toCheckpointRef,
+            threadId: input.threadId,
+            turnCount: input.toTurnCount,
+            cwd: threadContext.workspaceCwd,
           }),
         ],
         { concurrency: "unbounded" },
       );
 
-      if (!fromExists) {
-        return yield* new CheckpointUnavailableError({
-          threadId: input.threadId,
-          turnCount: input.fromTurnCount,
-          detail: `Filesystem checkpoint is unavailable for turn ${input.fromTurnCount}.`,
-        });
-      }
-
-      if (!toExists) {
-        return yield* new CheckpointUnavailableError({
-          threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          detail: `Filesystem checkpoint is unavailable for turn ${input.toTurnCount}.`,
-        });
-      }
-
       const diff = yield* checkpointStore.diffCheckpoints({
-        cwd: workspaceCwd,
-        fromCheckpointRef,
-        toCheckpointRef,
+        cwd: threadContext.workspaceCwd,
+        fromCheckpointRef: fromRef,
+        toCheckpointRef: toRef,
         fallbackFromToHead: false,
         ignoreWhitespace,
       });

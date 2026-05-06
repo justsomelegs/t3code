@@ -22,6 +22,14 @@ import { isProviderDriverKind, ProviderDriverKind } from "@t3tools/contracts";
 import type { ThreadId, TurnId } from "@t3tools/contracts";
 import { Schema } from "effect";
 import { resolveModelSlugForProvider } from "@t3tools/shared/model";
+import {
+  buildLatestTurn,
+  checkpointStatusToCaptureState,
+  completeLatestTurnFromCheckpoint,
+  latestTurnFromCheckpoint,
+  reduceLatestTurnState,
+  withLatestTurnCheckpointState,
+} from "@t3tools/shared/orchestrationLatestTurn";
 import { create } from "zustand";
 import {
   type ChatMessage,
@@ -828,16 +836,6 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
   };
 }
 
-function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
-  if (status === "error") {
-    return "error" as const;
-  }
-  if (status === "missing") {
-    return "interrupted" as const;
-  }
-  return "completed" as const;
-}
-
 function compareActivities(
   left: Thread["activities"][number],
   right: Thread["activities"][number],
@@ -853,35 +851,6 @@ function compareActivities(
   }
 
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
-}
-
-function buildLatestTurn(params: {
-  previous: Thread["latestTurn"];
-  turnId: NonNullable<Thread["latestTurn"]>["turnId"];
-  state: NonNullable<Thread["latestTurn"]>["state"];
-  requestedAt: string;
-  startedAt: string | null;
-  completedAt: string | null;
-  assistantMessageId: NonNullable<Thread["latestTurn"]>["assistantMessageId"];
-  checkpointState?: NonNullable<Thread["latestTurn"]>["checkpointState"];
-  sourceProposedPlan?: Thread["pendingSourceProposedPlan"];
-}): NonNullable<Thread["latestTurn"]> {
-  const resolvedPlan =
-    params.previous?.turnId === params.turnId
-      ? params.previous.sourceProposedPlan
-      : params.sourceProposedPlan;
-  return {
-    turnId: params.turnId,
-    state: params.state,
-    requestedAt: params.requestedAt,
-    startedAt: params.startedAt,
-    completedAt: params.completedAt,
-    assistantMessageId: params.assistantMessageId,
-    checkpointState:
-      params.checkpointState ??
-      (params.previous?.turnId === params.turnId ? params.previous.checkpointState : "not-started"),
-    ...(resolvedPlan ? { sourceProposedPlan: resolvedPlan } : {}),
-  };
 }
 
 function rebindTurnDiffSummariesForAssistantMessage(
@@ -1513,12 +1482,7 @@ function applyEnvironmentOrchestrationEvent(
 
     case "thread.turn-diff-completed":
       return updateThreadState(state, event.payload.threadId, (thread) => {
-        const checkpointState =
-          event.payload.status === "ready"
-            ? "ready"
-            : event.payload.status === "error"
-              ? "error"
-              : "unavailable";
+        const checkpointState = checkpointStatusToCaptureState(event.payload.status);
         const checkpoint = mapTurnDiffSummary({
           turnId: event.payload.turnId,
           checkpointTurnCount: event.payload.checkpointTurnCount,
@@ -1547,20 +1511,12 @@ function applyEnvironmentOrchestrationEvent(
           .slice(-MAX_THREAD_CHECKPOINTS);
         const latestTurn =
           thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId
-            ? buildLatestTurn({
+            ? completeLatestTurnFromCheckpoint({
                 previous: thread.latestTurn,
                 turnId: event.payload.turnId,
-                state:
-                  event.payload.status === "error"
-                    ? "error"
-                    : thread.latestTurn?.state === "interrupted"
-                      ? "interrupted"
-                      : "completed",
-                requestedAt: thread.latestTurn?.requestedAt ?? event.payload.completedAt,
-                startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
-                completedAt: thread.latestTurn?.completedAt ?? event.payload.completedAt,
+                status: event.payload.status,
+                completedAt: event.payload.completedAt,
                 assistantMessageId: event.payload.assistantMessageId,
-                checkpointState,
                 sourceProposedPlan: thread.pendingSourceProposedPlan,
               })
             : thread.latestTurn;
@@ -1575,26 +1531,17 @@ function applyEnvironmentOrchestrationEvent(
     case "thread.turn-state-set":
       return updateThreadState(state, event.payload.threadId, (thread) => ({
         ...thread,
-        latestTurn: buildLatestTurn({
+        latestTurn: reduceLatestTurnState({
           previous: thread.latestTurn,
-          turnId: event.payload.turnId,
-          state: event.payload.state,
-          requestedAt:
-            event.payload.requestedAt ??
-            (thread.latestTurn?.turnId === event.payload.turnId
-              ? thread.latestTurn.requestedAt
-              : event.occurredAt),
-          startedAt:
-            event.payload.startedAt ??
-            (thread.latestTurn?.turnId === event.payload.turnId
-              ? thread.latestTurn.startedAt
-              : event.occurredAt),
-          completedAt: event.payload.completedAt ?? null,
-          assistantMessageId:
-            event.payload.assistantMessageId ??
-            (thread.latestTurn?.turnId === event.payload.turnId
-              ? thread.latestTurn.assistantMessageId
-              : null),
+          payload: {
+            turnId: event.payload.turnId,
+            state: event.payload.state,
+            requestedAt: event.payload.requestedAt,
+            startedAt: event.payload.startedAt,
+            completedAt: event.payload.completedAt,
+            assistantMessageId: event.payload.assistantMessageId,
+          },
+          occurredAt: event.occurredAt,
           sourceProposedPlan: thread.pendingSourceProposedPlan,
         }),
         updatedAt: event.occurredAt,
@@ -1603,20 +1550,22 @@ function applyEnvironmentOrchestrationEvent(
     case "thread.turn-checkpoint-capture-started":
       return updateThreadState(state, event.payload.threadId, (thread) => ({
         ...thread,
-        latestTurn:
-          thread.latestTurn?.turnId === event.payload.turnId
-            ? { ...thread.latestTurn, checkpointState: "capturing" }
-            : thread.latestTurn,
+        latestTurn: withLatestTurnCheckpointState({
+          latestTurn: thread.latestTurn,
+          turnId: event.payload.turnId,
+          checkpointState: "capturing",
+        }),
         updatedAt: event.occurredAt,
       }));
 
     case "thread.turn-checkpoint-capture-failed":
       return updateThreadState(state, event.payload.threadId, (thread) => ({
         ...thread,
-        latestTurn:
-          thread.latestTurn?.turnId === event.payload.turnId
-            ? { ...thread.latestTurn, checkpointState: event.payload.checkpointState }
-            : thread.latestTurn,
+        latestTurn: withLatestTurnCheckpointState({
+          latestTurn: thread.latestTurn,
+          turnId: event.payload.turnId,
+          checkpointState: event.payload.checkpointState,
+        }),
         updatedAt: event.occurredAt,
       }));
 
@@ -1657,17 +1606,13 @@ function applyEnvironmentOrchestrationEvent(
           latestTurn:
             latestCheckpoint === null
               ? null
-              : {
+              : latestTurnFromCheckpoint({
                   turnId: latestCheckpoint.turnId,
-                  state: checkpointStatusToLatestTurnState(
-                    (latestCheckpoint.status ?? "ready") as "ready" | "missing" | "error",
-                  ),
-                  requestedAt: latestCheckpoint.completedAt,
-                  startedAt: latestCheckpoint.completedAt,
+                  status: (latestCheckpoint.status ?? "ready") as "ready" | "missing" | "error",
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId ?? null,
                   checkpointState: latestCheckpoint.checkpointState ?? "ready",
-                },
+                }),
           updatedAt: event.occurredAt,
         };
       });

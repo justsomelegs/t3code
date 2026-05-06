@@ -31,7 +31,7 @@ import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch"
 import { useTheme } from "../hooks/useTheme";
 import { buildPatchCacheKey } from "../lib/diffRendering";
 import { resolveDiffThemeName } from "../lib/diffRendering";
-import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
+import { inferCheckpointTurnCountByTurnId } from "../session-logic";
 import { selectProjectByRef, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
@@ -235,8 +235,14 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     cwd: activeCwd ?? null,
   });
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
-  const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
-    useTurnDiffSummaries(activeThread);
+  const turnDiffSummaries = useMemo(
+    () => activeThread?.turnDiffSummaries ?? [],
+    [activeThread?.turnDiffSummaries],
+  );
+  const inferredCheckpointTurnCountByTurnId = useMemo(
+    () => inferCheckpointTurnCountByTurnId(turnDiffSummaries),
+    [turnDiffSummaries],
+  );
   const orderedTurnDiffSummaries = useMemo(
     () => sortTurnDiffSummariesForDiffPanel(turnDiffSummaries, inferredCheckpointTurnCountByTurnId),
     [turnDiffSummaries, inferredCheckpointTurnCountByTurnId],

@@ -1,10 +1,7 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
-import { OrchestrationMessage, OrchestrationThread } from "@t3tools/contracts";
-import { Effect, Schema } from "effect";
-
-import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
-  MessageSentPayloadSchema,
+  OrchestrationMessage,
+  OrchestrationThread,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
@@ -15,22 +12,28 @@ import {
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
-  ThreadRuntimeModeSetPayload,
-  ThreadUnarchivedPayload,
   ThreadRevertedPayload,
+  ThreadRuntimeModeSetPayload,
   ThreadSessionSetPayload,
-  ThreadTurnDiffCompletedPayload,
+  ThreadMessageSentPayload as MessageSentPayloadSchema,
   ThreadTurnCheckpointCaptureFailedPayload,
   ThreadTurnCheckpointCaptureStartedPayload,
+  ThreadTurnDiffCompletedPayload,
   ThreadTurnStateSetPayload,
-} from "./Schemas.ts";
+  ThreadUnarchivedPayload,
+} from "@t3tools/contracts";
 import {
+  buildLatestTurn,
   checkpointStatusToCaptureState,
-  checkpointStatusToLatestTurnState,
-  isLegacyProviderDiffCheckpoint,
+  completeLatestTurnFromCheckpoint,
+  latestTurnFromCheckpoint,
   reduceLatestTurnState,
   withLatestTurnCheckpointState,
-} from "./projectionRules.ts";
+} from "@t3tools/shared/orchestrationLatestTurn";
+import { Effect, Schema } from "effect";
+
+import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
+import { isLegacyProviderDiffCheckpoint } from "../checkpointing/CheckpointRefs.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -427,7 +430,8 @@ export function projectEvent(
             session: payload.session,
             latestTurn:
               payload.session.status === "running" && payload.session.activeTurnId !== null
-                ? {
+                ? buildLatestTurn({
+                    previous: thread.latestTurn,
                     turnId: payload.session.activeTurnId,
                     state: "running",
                     requestedAt:
@@ -443,7 +447,7 @@ export function projectEvent(
                       thread.latestTurn?.turnId === payload.session.activeTurnId
                         ? thread.latestTurn.assistantMessageId
                         : null,
-                  }
+                  })
                 : thread.latestTurn,
             updatedAt: event.occurredAt,
           }),
@@ -527,26 +531,15 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
             latestTurn:
-              thread.latestTurn?.turnId === payload.turnId
-                ? {
-                    ...thread.latestTurn,
-                    state:
-                      thread.latestTurn.state === "running"
-                        ? checkpointStatusToLatestTurnState(payload.status)
-                        : thread.latestTurn.state,
-                    completedAt: thread.latestTurn.completedAt ?? payload.completedAt,
-                    assistantMessageId: payload.assistantMessageId,
-                    checkpointState: checkpointStatusToCaptureState(payload.status),
-                  }
-                : (thread.latestTurn ?? {
+              thread.latestTurn === null || thread.latestTurn.turnId === payload.turnId
+                ? completeLatestTurnFromCheckpoint({
+                    previous: thread.latestTurn,
                     turnId: payload.turnId,
-                    state: checkpointStatusToLatestTurnState(payload.status),
-                    requestedAt: payload.completedAt,
-                    startedAt: payload.completedAt,
+                    status: payload.status,
                     completedAt: payload.completedAt,
                     assistantMessageId: payload.assistantMessageId,
-                    checkpointState: checkpointStatusToCaptureState(payload.status),
-                  }),
+                  })
+                : thread.latestTurn,
             updatedAt: event.occurredAt,
           }),
         };
@@ -657,15 +650,13 @@ export function projectEvent(
           const latestTurn =
             latestCheckpoint === null
               ? null
-              : {
+              : latestTurnFromCheckpoint({
                   turnId: latestCheckpoint.turnId,
-                  state: checkpointStatusToLatestTurnState(latestCheckpoint.status),
-                  requestedAt: latestCheckpoint.completedAt,
-                  startedAt: latestCheckpoint.completedAt,
+                  status: latestCheckpoint.status,
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId,
                   checkpointState: latestCheckpoint.checkpointState ?? "ready",
-                };
+                });
 
           return {
             ...nextBase,

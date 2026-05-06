@@ -15,7 +15,6 @@ import {
 import { checkpointRefForThreadTurn } from "../Utils.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { TurnDiffService } from "../Services/TurnDiffService.ts";
-import { WorkspaceDiffSnapshotService } from "../Services/WorkspaceDiffSnapshotService.ts";
 import { TurnDiffServiceLive } from "./TurnDiffService.ts";
 
 function makeContext(input: {
@@ -97,11 +96,6 @@ describe("TurnDiffServiceLive", () => {
     const layer = TurnDiffServiceLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
-        Layer.succeed(WorkspaceDiffSnapshotService, {
-          getLiveTurnDiff: () => Effect.succeed({ diff: "", truncated: false }),
-        }),
-      ),
-      Layer.provideMerge(
         makeProjectionLayer(
           makeContext({ threadId, turnId, checkpointTurnCount: 1, checkpointRef: toCheckpointRef }),
         ),
@@ -140,32 +134,27 @@ describe("TurnDiffServiceLive", () => {
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
-      diffCheckpointToWorkspace: () => Effect.succeed({ diff: "", truncated: false }),
+      diffCheckpointToWorkspace: ({ fromCheckpointRef, scope }) =>
+        Effect.sync(() => {
+          liveCalls.push({ fromCheckpointRef, scope });
+          return {
+            diff: [
+              "diff --git a/live.txt b/live.txt",
+              "new file mode 100644",
+              "index 0000000..2222222",
+              "--- /dev/null",
+              "+++ b/live.txt",
+              "@@ -0,0 +1 @@",
+              "+live",
+            ].join("\n"),
+            truncated: false,
+          };
+        }),
       deleteCheckpointRefs: () => Effect.void,
     };
 
     const layer = TurnDiffServiceLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(
-        Layer.succeed(WorkspaceDiffSnapshotService, {
-          getLiveTurnDiff: ({ fromCheckpointRef, scope }) =>
-            Effect.sync(() => {
-              liveCalls.push({ fromCheckpointRef, scope });
-              return {
-                diff: [
-                  "diff --git a/live.txt b/live.txt",
-                  "new file mode 100644",
-                  "index 0000000..2222222",
-                  "--- /dev/null",
-                  "+++ b/live.txt",
-                  "@@ -0,0 +1 @@",
-                  "+live",
-                ].join("\n"),
-                truncated: false,
-              };
-            }),
-        }),
-      ),
       Layer.provideMerge(
         makeProjectionLayer(
           makeContext({
@@ -260,11 +249,6 @@ describe("TurnDiffServiceLive", () => {
 
     const layer = TurnDiffServiceLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(
-        Layer.succeed(WorkspaceDiffSnapshotService, {
-          getLiveTurnDiff: () => Effect.succeed({ diff: "", truncated: false }),
-        }),
-      ),
       Layer.provideMerge(
         makeProjectionLayer(
           makeContext({
