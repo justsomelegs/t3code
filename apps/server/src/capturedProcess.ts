@@ -2,7 +2,7 @@ import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:
 
 import { Data, Effect } from "effect";
 
-export interface CollectedProcessResult {
+export interface CapturedProcessResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly code: number | null;
@@ -11,45 +11,45 @@ export interface CollectedProcessResult {
   readonly stderrTruncated: boolean;
 }
 
-export type CollectedProcessOutputMode = "error" | "truncate";
-export type CollectedProcessCollectorMode = "concat" | "parts";
+export type CapturedProcessOutputMode = "error" | "truncate";
+export type CapturedProcessCollectorMode = "concat" | "parts";
 
-export interface CollectedProcessRunOptions {
+export interface CapturedProcessRunOptions {
   readonly cwd?: string;
   readonly timeoutMs: number;
   readonly env?: NodeJS.ProcessEnv;
   readonly stdin?: string;
   readonly maxOutputBytes: number;
-  readonly outputMode: CollectedProcessOutputMode;
+  readonly outputMode: CapturedProcessOutputMode;
   readonly truncatedMarker?: string;
   readonly shell?: boolean;
-  readonly collectorMode?: CollectedProcessCollectorMode;
+  readonly collectorMode?: CapturedProcessCollectorMode;
 }
 
-export class CollectedProcessSpawnError extends Data.TaggedError("CollectedProcessSpawnError")<{
+export class CapturedProcessSpawnError extends Data.TaggedError("CapturedProcessSpawnError")<{
   readonly cause: unknown;
 }> {}
 
-export class CollectedProcessStdinError extends Data.TaggedError("CollectedProcessStdinError")<{
+export class CapturedProcessStdinError extends Data.TaggedError("CapturedProcessStdinError")<{
   readonly cause: unknown;
 }> {}
 
-export class CollectedProcessOutputLimitError extends Data.TaggedError(
-  "CollectedProcessOutputLimitError",
+export class CapturedProcessOutputLimitError extends Data.TaggedError(
+  "CapturedProcessOutputLimitError",
 )<{
   readonly stream: "stdout" | "stderr";
   readonly maxBytes: number;
 }> {}
 
-export class CollectedProcessTimeoutError extends Data.TaggedError("CollectedProcessTimeoutError")<{
+export class CapturedProcessTimeoutError extends Data.TaggedError("CapturedProcessTimeoutError")<{
   readonly timeoutMs: number;
 }> {}
 
-export type CollectedProcessError =
-  | CollectedProcessSpawnError
-  | CollectedProcessStdinError
-  | CollectedProcessOutputLimitError
-  | CollectedProcessTimeoutError;
+export type CapturedProcessError =
+  | CapturedProcessSpawnError
+  | CapturedProcessStdinError
+  | CapturedProcessOutputLimitError
+  | CapturedProcessTimeoutError;
 
 /**
  * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
@@ -78,7 +78,7 @@ interface OutputCollector {
 
 function makeConcatCollector(
   maxBytes: number,
-  outputMode: CollectedProcessOutputMode,
+  outputMode: CapturedProcessOutputMode,
 ): OutputCollector {
   let text = "";
   let bytes = 0;
@@ -119,7 +119,7 @@ function makeConcatCollector(
 
 function makePartsCollector(
   maxBytes: number,
-  outputMode: CollectedProcessOutputMode,
+  outputMode: CapturedProcessOutputMode,
   truncatedMarker: string,
 ): OutputCollector {
   const decoder = new TextDecoder();
@@ -180,8 +180,8 @@ function makePartsCollector(
 
 function makeOutputCollector(
   maxBytes: number,
-  outputMode: CollectedProcessOutputMode,
-  collectorMode: CollectedProcessCollectorMode,
+  outputMode: CapturedProcessOutputMode,
+  collectorMode: CapturedProcessCollectorMode,
   truncatedMarker: string,
 ): OutputCollector {
   if (collectorMode === "concat") {
@@ -190,24 +190,24 @@ function makeOutputCollector(
   return makePartsCollector(maxBytes, outputMode, truncatedMarker);
 }
 
-function isCollectedProcessError(value: unknown): value is CollectedProcessError {
+function isCapturedProcessError(value: unknown): value is CapturedProcessError {
   return (
-    value instanceof CollectedProcessSpawnError ||
-    value instanceof CollectedProcessStdinError ||
-    value instanceof CollectedProcessOutputLimitError ||
-    value instanceof CollectedProcessTimeoutError
+    value instanceof CapturedProcessSpawnError ||
+    value instanceof CapturedProcessStdinError ||
+    value instanceof CapturedProcessOutputLimitError ||
+    value instanceof CapturedProcessTimeoutError
   );
 }
 
-async function runCollectedProcessPromise(
+async function runCapturedProcessPromise(
   command: string,
   args: readonly string[],
-  options: CollectedProcessRunOptions,
-): Promise<CollectedProcessResult> {
+  options: CapturedProcessRunOptions,
+): Promise<CapturedProcessResult> {
   const collectorMode = options.collectorMode ?? "concat";
   const truncatedMarker = options.truncatedMarker ?? "";
 
-  return new Promise<CollectedProcessResult>((resolve, reject) => {
+  return new Promise<CapturedProcessResult>((resolve, reject) => {
     const child = spawn(command, args, {
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       ...(options.env !== undefined ? { env: options.env } : {}),
@@ -235,7 +235,7 @@ async function runCollectedProcessPromise(
       forceKillTimer = setTimeout(() => {
         killChild(child, "SIGKILL");
       }, 1_000);
-      finalize(() => reject(new CollectedProcessTimeoutError({ timeoutMs: options.timeoutMs })));
+      finalize(() => reject(new CapturedProcessTimeoutError({ timeoutMs: options.timeoutMs })));
     }, options.timeoutMs);
 
     const finalize = (callback: () => void): void => {
@@ -250,7 +250,7 @@ async function runCollectedProcessPromise(
       callback();
     };
 
-    const fail = (error: CollectedProcessError): void => {
+    const fail = (error: CapturedProcessError): void => {
       killChild(child, "SIGTERM");
       finalize(() => reject(error));
     };
@@ -258,7 +258,7 @@ async function runCollectedProcessPromise(
     child.stdout?.on("data", (chunk: Buffer | string) => {
       if (stdout.append(chunk)) {
         fail(
-          new CollectedProcessOutputLimitError({
+          new CapturedProcessOutputLimitError({
             stream: "stdout",
             maxBytes: options.maxOutputBytes,
           }),
@@ -269,7 +269,7 @@ async function runCollectedProcessPromise(
     child.stderr?.on("data", (chunk: Buffer | string) => {
       if (stderr.append(chunk)) {
         fail(
-          new CollectedProcessOutputLimitError({
+          new CapturedProcessOutputLimitError({
             stream: "stderr",
             maxBytes: options.maxOutputBytes,
           }),
@@ -278,7 +278,7 @@ async function runCollectedProcessPromise(
     });
 
     child.once("error", (cause) => {
-      finalize(() => reject(new CollectedProcessSpawnError({ cause })));
+      finalize(() => reject(new CapturedProcessSpawnError({ cause })));
     });
 
     child.once("close", (code, signal) => {
@@ -297,13 +297,13 @@ async function runCollectedProcessPromise(
     });
 
     child.stdin?.once("error", (cause) => {
-      fail(new CollectedProcessStdinError({ cause }));
+      fail(new CapturedProcessStdinError({ cause }));
     });
 
     if (options.stdin !== undefined) {
       child.stdin?.write(options.stdin, (cause) => {
         if (cause) {
-          fail(new CollectedProcessStdinError({ cause }));
+          fail(new CapturedProcessStdinError({ cause }));
           return;
         }
         child.stdin?.end();
@@ -315,14 +315,14 @@ async function runCollectedProcessPromise(
   });
 }
 
-export function runCollectedProcess(
+export function runCapturedProcess(
   command: string,
   args: readonly string[],
-  options: CollectedProcessRunOptions,
-): Effect.Effect<CollectedProcessResult, CollectedProcessError> {
+  options: CapturedProcessRunOptions,
+): Effect.Effect<CapturedProcessResult, CapturedProcessError> {
   return Effect.tryPromise({
-    try: () => runCollectedProcessPromise(command, args, options),
+    try: () => runCapturedProcessPromise(command, args, options),
     catch: (cause) =>
-      isCollectedProcessError(cause) ? cause : new CollectedProcessSpawnError({ cause }),
+      isCapturedProcessError(cause) ? cause : new CapturedProcessSpawnError({ cause }),
   });
 }

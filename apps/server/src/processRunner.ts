@@ -1,6 +1,6 @@
 import { Effect, Match } from "effect";
 
-import { runCollectedProcess } from "./collectedProcessRunner.ts";
+import { runCapturedProcess } from "./capturedProcess.ts";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -102,7 +102,7 @@ export async function runProcess(
   const maxBufferBytes = options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
   const outputMode = options.outputMode ?? "error";
   const result = await Effect.runPromise(
-    runCollectedProcess(command, args, {
+    runCapturedProcess(command, args, {
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       timeoutMs,
       ...(options.env !== undefined ? { env: options.env } : {}),
@@ -114,12 +114,11 @@ export async function runProcess(
     }).pipe(
       Effect.mapError((error) =>
         Match.valueTags(error, {
-          CollectedProcessSpawnError: ({ cause }) => normalizeSpawnError(command, args, cause),
-          CollectedProcessStdinError: ({ cause }) => normalizeStdinError(command, args, cause),
-          CollectedProcessOutputLimitError: ({ stream, maxBytes }) =>
+          CapturedProcessSpawnError: ({ cause }) => normalizeSpawnError(command, args, cause),
+          CapturedProcessStdinError: ({ cause }) => normalizeStdinError(command, args, cause),
+          CapturedProcessOutputLimitError: ({ stream, maxBytes }) =>
             normalizeBufferError(command, args, stream, maxBytes),
-          CollectedProcessTimeoutError: () =>
-            new Error(`${commandLabel(command, args)} timed out.`),
+          CapturedProcessTimeoutError: () => new Error(`${commandLabel(command, args)} timed out.`),
         }),
       ),
     ),

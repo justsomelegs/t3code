@@ -8,7 +8,7 @@ import {
   VcsProcessSpawnError,
   VcsProcessTimeoutError,
 } from "@t3tools/contracts";
-import { runCollectedProcess } from "../collectedProcessRunner.ts";
+import { runCapturedProcess } from "../capturedProcess.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 
 export interface VcsProcessInput {
@@ -169,7 +169,7 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
       command: label,
       cwd: input.cwd,
     };
-    const result = yield* runCollectedProcess(input.command, [...input.args], {
+    const result = yield* runCapturedProcess(input.command, [...input.args], {
       cwd: input.cwd,
       env: {
         ...process.env,
@@ -186,24 +186,24 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
       Effect.mapError(
         (error): VcsError =>
           Match.valueTags(error, {
-            CollectedProcessSpawnError: ({ cause }) =>
+            CapturedProcessSpawnError: ({ cause }) =>
               new VcsProcessSpawnError({
                 ...baseError,
                 cause,
               }),
-            CollectedProcessStdinError: ({ cause }) =>
+            CapturedProcessStdinError: ({ cause }) =>
               new VcsOutputDecodeError({
                 ...baseError,
                 detail: "failed to write process stdin",
                 cause,
               }),
-            CollectedProcessOutputLimitError: ({ stream, maxBytes }) =>
+            CapturedProcessOutputLimitError: ({ stream, maxBytes }) =>
               new VcsOutputDecodeError({
                 ...baseError,
                 detail: `process ${stream} exceeded ${maxBytes} bytes before truncation could complete`,
                 cause: new Error(`Exceeded ${stream} limit (${maxBytes} bytes).`),
               }),
-            CollectedProcessTimeoutError: ({ timeoutMs }) =>
+            CapturedProcessTimeoutError: ({ timeoutMs }) =>
               new VcsProcessTimeoutError({
                 ...baseError,
                 timeoutMs,
