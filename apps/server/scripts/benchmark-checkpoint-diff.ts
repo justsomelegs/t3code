@@ -42,7 +42,7 @@ function percentile(sortedSamples: number[], ratio: number): number {
 }
 
 function summarize(samples: number[]) {
-  const sorted = [...samples].sort((left, right) => left - right);
+  const sorted = samples.toSorted((left, right) => left - right);
   const total = samples.reduce((sum, sample) => sum + sample, 0);
   return {
     iterations: samples.length,
@@ -51,6 +51,7 @@ function summarize(samples: number[]) {
     maxMs: Number((sorted.at(-1) ?? 0).toFixed(2)),
     p50Ms: Number(percentile(sorted, 0.5).toFixed(2)),
     p95Ms: Number(percentile(sorted, 0.95).toFixed(2)),
+    p99Ms: Number(percentile(sorted, 0.99).toFixed(2)),
   };
 }
 
@@ -234,9 +235,6 @@ async function main() {
         registry.resolve({ cwd: repoRoot, requestedKind: "git" }),
       );
       const checkpointOps = driverHandle.driver.checkpoints;
-      if (!checkpointOps) {
-        throw new Error("Resolved driver does not implement checkpoints.");
-      }
 
       const diff = await runtime.runPromise(
         checkpointStore.diffCheckpoints({
@@ -253,14 +251,19 @@ async function main() {
         patchLines: diff.length === 0 ? 0 : diff.split(/\r?\n/).length,
       };
 
-      const results = Object.fromEntries(
-        await Promise.all([
-          benchmark("vcsRegistry.resolve", iterations, () =>
-            runtime
-              .runPromise(registry.resolve({ cwd: repoRoot, requestedKind: "git" }))
-              .then(() => undefined),
-          ),
-          benchmark("driver.checkpoints.diffCheckpoints", iterations, () =>
+      const resultsEntries: Array<readonly [string, ReturnType<typeof summarize>]> = [];
+
+      resultsEntries.push(
+        await benchmark("vcsRegistry.resolve", iterations, () =>
+          runtime
+            .runPromise(registry.resolve({ cwd: repoRoot, requestedKind: "git" }))
+            .then(() => undefined),
+        ),
+      );
+
+      if (checkpointOps) {
+        resultsEntries.push(
+          await benchmark("driver.checkpoints.diffCheckpoints", iterations, () =>
             runtime
               .runPromise(
                 checkpointOps.diffCheckpoints({
@@ -272,35 +275,46 @@ async function main() {
               )
               .then(() => undefined),
           ),
-          benchmark("checkpointStore.diffCheckpoints", iterations, () =>
-            runtime
-              .runPromise(
-                checkpointStore.diffCheckpoints({
-                  cwd: repoRoot,
-                  fromCheckpointRef,
-                  toCheckpointRef,
-                  ignoreWhitespace: true,
-                }),
-              )
-              .then(() => undefined),
-          ),
-          benchmark("checkpointDiffQuery.getTurnDiff", iterations, () =>
-            runtime
-              .runPromise(
-                checkpointDiffQuery.getTurnDiff({
-                  threadId,
-                  fromTurnCount: 0,
-                  toTurnCount: 1,
-                  ignoreWhitespace: true,
-                }),
-              )
-              .then(() => undefined),
-          ),
-          benchmark("parseTurnDiffFilesFromUnifiedDiff", iterations, async () => {
-            parseTurnDiffFilesFromUnifiedDiff(diff);
-          }),
-        ]),
+        );
+      }
+
+      resultsEntries.push(
+        await benchmark("checkpointStore.diffCheckpoints", iterations, () =>
+          runtime
+            .runPromise(
+              checkpointStore.diffCheckpoints({
+                cwd: repoRoot,
+                fromCheckpointRef,
+                toCheckpointRef,
+                ignoreWhitespace: true,
+              }),
+            )
+            .then(() => undefined),
+        ),
       );
+
+      resultsEntries.push(
+        await benchmark("checkpointDiffQuery.getTurnDiff", iterations, () =>
+          runtime
+            .runPromise(
+              checkpointDiffQuery.getTurnDiff({
+                threadId,
+                fromTurnCount: 0,
+                toTurnCount: 1,
+                ignoreWhitespace: true,
+              }),
+            )
+            .then(() => undefined),
+        ),
+      );
+
+      resultsEntries.push(
+        await benchmark("parseTurnDiffFilesFromUnifiedDiff", iterations, async () => {
+          parseTurnDiffFilesFromUnifiedDiff(diff);
+        }),
+      );
+
+      const results = Object.fromEntries(resultsEntries);
 
       console.log(
         JSON.stringify(

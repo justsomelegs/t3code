@@ -68,6 +68,13 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
 
+interface CollectedOutputState {
+  readonly decoder: TextDecoder;
+  readonly parts: Array<string>;
+  readonly bytes: number;
+  readonly truncated: boolean;
+}
+
 function commandLabel(command: string, args: ReadonlyArray<string>): string {
   return [command, ...args].join(" ");
 }
@@ -84,6 +91,62 @@ function outputDecodeError(
     detail,
     cause,
   });
+}
+
+function killChild(child: NodeChildProcessHandle, signal: NodeJS.Signals = "SIGTERM"): void {
+  if (process.platform === "win32" && child.pid !== undefined) {
+    try {
+      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      return;
+    } catch {
+      // Fall back to direct kill if taskkill is unavailable.
+    }
+  }
+  child.kill(signal);
+}
+
+function appendCollectedChunk(
+  state: CollectedOutputState,
+  chunk: Uint8Array,
+  maxBytes: number,
+  truncatedMarker: string,
+): CollectedOutputState {
+  if (state.truncated) {
+    return state;
+  }
+
+  const remainingBytes = maxBytes - state.bytes;
+  if (remainingBytes <= 0) {
+    return {
+      ...state,
+      parts: truncatedMarker.length === 0 ? state.parts : [...state.parts, truncatedMarker],
+      truncated: true,
+    };
+  }
+
+  const nextChunk = chunk.byteLength > remainingBytes ? chunk.subarray(0, remainingBytes) : chunk;
+  const nextPart = state.decoder.decode(nextChunk, { stream: true });
+  const nextParts = nextPart.length === 0 ? state.parts : [...state.parts, nextPart];
+  const truncated = chunk.byteLength > remainingBytes;
+
+  return {
+    decoder: state.decoder,
+    parts: truncated && truncatedMarker.length > 0 ? [...nextParts, truncatedMarker] : nextParts,
+    bytes: state.bytes + nextChunk.byteLength,
+    truncated,
+  };
+}
+
+function finalizeCollectedOutput(state: CollectedOutputState): {
+  readonly text: string;
+  readonly truncated: boolean;
+} {
+  return {
+    text: state.truncated
+      ? state.parts.join("")
+      : `${state.parts.join("")}${state.decoder.decode()}`,
+    truncated: state.truncated,
+  };
 }
 
 export const collectText = Effect.fn("VcsProcess.collectText")(function* (input: {
@@ -162,55 +225,142 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
     const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
     const label = commandLabel(input.command, input.args);
+    const truncatedMarker = input.truncateOutputAtMaxBytes ? OUTPUT_TRUNCATED_MARKER : "";
+    const runProcess = Effect.callback<VcsProcessOutput, VcsError>((resume) => {
+      const processHandle = spawnChildProcess(input.command, [...input.args], {
+        cwd: input.cwd,
+        env: {
+          ...process.env,
+          ...input.env,
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdoutState: CollectedOutputState = {
+        decoder: new TextDecoder(),
+        parts: [],
+        bytes: 0,
+        truncated: false,
+      };
+      let stderrState: CollectedOutputState = {
+        decoder: new TextDecoder(),
+        parts: [],
+        bytes: 0,
+        truncated: false,
+      };
+      let done = false;
+      let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const runProcess = Effect.gen(function* () {
-      const [stdout, stderr, exitCode] = yield* withProcess(input, (child) =>
-        Effect.all(
-          [
-            collectText({
+      const finish = (effect: Effect.Effect<VcsProcessOutput, VcsError>) => {
+        if (done) {
+          return;
+        }
+        done = true;
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+        }
+        resume(effect);
+      };
+
+      processHandle.on("error", (cause) => {
+        finish(
+          Effect.fail(
+            new VcsProcessSpawnError({
               operation: input.operation,
               command: label,
               cwd: input.cwd,
-              stream: child.stdout,
-              maxOutputBytes,
-              truncateOutputAtMaxBytes: input.truncateOutputAtMaxBytes ?? false,
+              cause,
             }),
-            collectText({
-              operation: input.operation,
-              command: label,
-              cwd: input.cwd,
-              stream: child.stderr,
-              maxOutputBytes,
-              truncateOutputAtMaxBytes: input.truncateOutputAtMaxBytes ?? false,
-            }),
-            child.exitCode,
-            input.stdin === undefined ? Effect.void : child.writeStdin(input.stdin),
-          ],
-          { concurrency: "unbounded" },
-        ),
-      ).pipe(Effect.map(([stdout, stderr, exitCode]) => [stdout, stderr, exitCode] as const));
+          ),
+        );
+      });
 
-      if (!input.allowNonZeroExit && exitCode !== 0) {
-        return yield* new VcsProcessExitError({
-          operation: input.operation,
-          command: label,
-          cwd: input.cwd,
-          exitCode,
-          detail: stderr.text.trim() || `${label} exited with code ${exitCode}.`,
+      processHandle.stdout?.on("data", (chunk: Buffer | string) => {
+        const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+        stdoutState = appendCollectedChunk(stdoutState, bytes, maxOutputBytes, truncatedMarker);
+      });
+
+      processHandle.stderr?.on("data", (chunk: Buffer | string) => {
+        const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+        stderrState = appendCollectedChunk(stderrState, bytes, maxOutputBytes, truncatedMarker);
+      });
+
+      processHandle.stdin?.on("error", (cause) => {
+        finish(Effect.fail(outputDecodeError(input, "failed to write process stdin", cause)));
+      });
+
+      processHandle.on("close", (code, signal) => {
+        if (done) {
+          return;
+        }
+
+        if (code === null) {
+          finish(
+            Effect.fail(
+              outputDecodeError(
+                input,
+                `failed to read process exit code${signal ? ` (signal: ${signal})` : ""}`,
+                new Error(
+                  `Process exited without exit code${signal ? ` (signal: ${signal})` : ""}.`,
+                ),
+              ),
+            ),
+          );
+          return;
+        }
+
+        const stdout = finalizeCollectedOutput(stdoutState);
+        const stderr = finalizeCollectedOutput(stderrState);
+        const exitCode = ChildProcessSpawner.ExitCode(code);
+
+        if (!input.allowNonZeroExit && code !== 0) {
+          finish(
+            Effect.fail(
+              new VcsProcessExitError({
+                operation: input.operation,
+                command: label,
+                cwd: input.cwd,
+                exitCode,
+                detail: stderr.text.trim() || `${label} exited with code ${code}.`,
+              }),
+            ),
+          );
+          return;
+        }
+
+        finish(
+          Effect.succeed({
+            exitCode,
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdoutTruncated: stdout.truncated,
+            stderrTruncated: stderr.truncated,
+          }),
+        );
+      });
+
+      if (input.stdin !== undefined) {
+        processHandle.stdin?.write(input.stdin, (cause) => {
+          if (cause) {
+            finish(Effect.fail(outputDecodeError(input, "failed to write process stdin", cause)));
+            return;
+          }
+          processHandle.stdin?.end();
         });
+      } else {
+        processHandle.stdin?.end();
       }
 
-      return {
-        exitCode,
-        stdout: stdout.text,
-        stderr: stderr.text,
-        stdoutTruncated: stdout.truncated,
-        stderrTruncated: stderr.truncated,
-      } satisfies VcsProcessOutput;
+      return Effect.sync(() => {
+        if (!done) {
+          killChild(processHandle, "SIGTERM");
+          forceKillTimer = setTimeout(() => {
+            killChild(processHandle, "SIGKILL");
+          }, 1_000);
+        }
+      });
     });
 
     return yield* runProcess.pipe(
-      Effect.scoped,
       Effect.timeoutOption(Duration.millis(timeoutMs)),
       Effect.flatMap((result) =>
         Option.match(result, {
