@@ -1,6 +1,7 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
-import * as NodeTimers from "node:timers";
+import { Effect, Match } from "effect";
+
+import { runCollectedProcess } from "./collectedProcessRunner.ts";
+
 export interface ProcessRunOptions {
   cwd?: string | undefined;
   timeoutMs?: number | undefined;
@@ -66,9 +67,7 @@ function normalizeExitError(
     return new Error(`Command not found: ${command}`);
   }
 
-  const reason = result.timedOut
-    ? "timed out"
-    : `failed (code=${result.code ?? "null"}, signal=${result.signal ?? "null"})`;
+  const reason = `failed (code=${result.code ?? "null"}, signal=${result.signal ?? "null"})`;
   const stderr = result.stderr.trim();
   const detail = stderr.length > 0 ? ` ${stderr}` : "";
   return new Error(`${commandLabel(command, args)} ${reason}.${detail}`);
@@ -94,51 +93,6 @@ function normalizeBufferError(
 
 const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
-/**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
- */
-function killChild(child: ChildProcessHandle, signal: NodeJS.Signals = "SIGTERM"): void {
-  if (process.platform === "win32" && child.pid !== undefined) {
-    try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-      return;
-    } catch {
-      // fallback to direct kill
-    }
-  }
-  child.kill(signal);
-}
-
-function appendChunkWithinLimit(
-  target: string,
-  currentBytes: number,
-  chunk: Buffer,
-  maxBytes: number,
-): {
-  next: string;
-  nextBytes: number;
-  truncated: boolean;
-} {
-  const remaining = maxBytes - currentBytes;
-  if (remaining <= 0) {
-    return { next: target, nextBytes: currentBytes, truncated: true };
-  }
-  if (chunk.length <= remaining) {
-    return {
-      next: `${target}${chunk.toString()}`,
-      nextBytes: currentBytes + chunk.length,
-      truncated: false,
-    };
-  }
-  return {
-    next: `${target}${chunk.subarray(0, remaining).toString()}`,
-    nextBytes: currentBytes + remaining,
-    truncated: true,
-  };
-}
-
 export async function runProcess(
   command: string,
   args: readonly string[],
@@ -147,140 +101,38 @@ export async function runProcess(
   const timeoutMs = options.timeoutMs ?? 60_000;
   const maxBufferBytes = options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
   const outputMode = options.outputMode ?? "error";
-
-  return new Promise<ProcessRunResult>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: "pipe",
+  const result = await Effect.runPromise(
+    runCollectedProcess(command, args, {
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      timeoutMs,
+      ...(options.env !== undefined ? { env: options.env } : {}),
+      ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
+      maxOutputBytes: maxBufferBytes,
+      outputMode,
       shell: process.platform === "win32",
-    });
+      collectorMode: "concat",
+    }).pipe(
+      Effect.mapError((error) =>
+        Match.valueTags(error, {
+          CollectedProcessSpawnError: ({ cause }) => normalizeSpawnError(command, args, cause),
+          CollectedProcessStdinError: ({ cause }) => normalizeStdinError(command, args, cause),
+          CollectedProcessOutputLimitError: ({ stream, maxBytes }) =>
+            normalizeBufferError(command, args, stream, maxBytes),
+          CollectedProcessTimeoutError: () =>
+            new Error(`${commandLabel(command, args)} timed out.`),
+        }),
+      ),
+    ),
+  );
 
-    let stdout = "";
-    let stderr = "";
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let stdoutTruncated = false;
-    let stderrTruncated = false;
-    let timedOut = false;
-    let settled = false;
-    let forceKillTimer: ReturnType<typeof NodeTimers.setTimeout> | null = null;
+  const normalizedResult: ProcessRunResult = {
+    ...result,
+    timedOut: false,
+  };
 
-    // @effect-diagnostics-next-line globalTimers:off - Promise/child_process boundary; moving this runner to Effect timers is a separate refactor.
-    const timeoutTimer = NodeTimers.setTimeout(() => {
-      timedOut = true;
-      killChild(child, "SIGTERM");
-      // @effect-diagnostics-next-line globalTimers:off - Promise/child_process boundary; see timeout timer above.
-      forceKillTimer = NodeTimers.setTimeout(() => {
-        killChild(child, "SIGKILL");
-      }, 1_000);
-    }, timeoutMs);
+  if (!options.allowNonZeroExit && normalizedResult.code !== null && normalizedResult.code !== 0) {
+    throw normalizeExitError(command, args, normalizedResult);
+  }
 
-    const finalize = (callback: () => void): void => {
-      if (settled) return;
-      settled = true;
-      NodeTimers.clearTimeout(timeoutTimer);
-      if (forceKillTimer) {
-        NodeTimers.clearTimeout(forceKillTimer);
-      }
-      callback();
-    };
-
-    const fail = (error: Error): void => {
-      killChild(child, "SIGTERM");
-      finalize(() => {
-        reject(error);
-      });
-    };
-
-    const appendOutput = (stream: "stdout" | "stderr", chunk: Buffer | string): Error | null => {
-      const chunkBuffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-      const text = chunkBuffer.toString();
-      const byteLength = chunkBuffer.length;
-      if (stream === "stdout") {
-        if (outputMode === "truncate") {
-          const appended = appendChunkWithinLimit(stdout, stdoutBytes, chunkBuffer, maxBufferBytes);
-          stdout = appended.next;
-          stdoutBytes = appended.nextBytes;
-          stdoutTruncated = stdoutTruncated || appended.truncated;
-          return null;
-        }
-        stdout += text;
-        stdoutBytes += byteLength;
-        if (stdoutBytes > maxBufferBytes) {
-          return normalizeBufferError(command, args, "stdout", maxBufferBytes);
-        }
-      } else {
-        if (outputMode === "truncate") {
-          const appended = appendChunkWithinLimit(stderr, stderrBytes, chunkBuffer, maxBufferBytes);
-          stderr = appended.next;
-          stderrBytes = appended.nextBytes;
-          stderrTruncated = stderrTruncated || appended.truncated;
-          return null;
-        }
-        stderr += text;
-        stderrBytes += byteLength;
-        if (stderrBytes > maxBufferBytes) {
-          return normalizeBufferError(command, args, "stderr", maxBufferBytes);
-        }
-      }
-      return null;
-    };
-
-    child.stdout.on("data", (chunk: Buffer | string) => {
-      const error = appendOutput("stdout", chunk);
-      if (error) {
-        fail(error);
-      }
-    });
-
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      const error = appendOutput("stderr", chunk);
-      if (error) {
-        fail(error);
-      }
-    });
-
-    child.once("error", (error) => {
-      finalize(() => {
-        reject(normalizeSpawnError(command, args, error));
-      });
-    });
-
-    child.once("close", (code, signal) => {
-      const result: ProcessRunResult = {
-        stdout,
-        stderr,
-        code,
-        signal,
-        timedOut,
-        stdoutTruncated,
-        stderrTruncated,
-      };
-
-      finalize(() => {
-        if (!options.allowNonZeroExit && (timedOut || (code !== null && code !== 0))) {
-          reject(normalizeExitError(command, args, result));
-          return;
-        }
-        resolve(result);
-      });
-    });
-
-    child.stdin.once("error", (error) => {
-      fail(normalizeStdinError(command, args, error));
-    });
-
-    if (options.stdin !== undefined) {
-      child.stdin.write(options.stdin, (error) => {
-        if (error) {
-          fail(normalizeStdinError(command, args, error));
-          return;
-        }
-        child.stdin.end();
-      });
-      return;
-    }
-    child.stdin.end();
-  });
+  return normalizedResult;
 }

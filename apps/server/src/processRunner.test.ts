@@ -1,16 +1,55 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterAll, describe, expect, it } from "vitest";
 
 import { isWindowsCommandNotFound, runProcess } from "./processRunner.ts";
 
+function makeHelperScript(): string {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "t3-process-runner-test-"));
+  const helperPath = path.join(directory, "helper.js");
+  writeFileSync(
+    helperPath,
+    [
+      "const mode = process.argv[2];",
+      "if (mode === 'stdout-bytes') {",
+      "  process.stdout.write('x'.repeat(Number(process.argv[3] ?? '0')));",
+      "} else if (mode === 'stdin-echo') {",
+      "  process.stdin.setEncoding('utf8');",
+      "  let data = '';",
+      "  process.stdin.on('data', (chunk) => { data += chunk; });",
+      "  process.stdin.on('end', () => { process.stdout.write(data); });",
+      "} else if (mode === 'stderr-exit') {",
+      "  process.stderr.write(process.argv[3] ?? '');",
+      "  process.exit(Number(process.argv[4] ?? '0'));",
+      "} else if (mode === 'sleep') {",
+      "  setTimeout(() => process.stdout.write('late'), Number(process.argv[3] ?? '0'));",
+      "} else {",
+      "  process.exit(2);",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return helperPath;
+}
+
+function cleanupHelperScript(helperPath: string) {
+  rmSync(path.dirname(helperPath), { recursive: true, force: true });
+}
+
 describe("runProcess", () => {
+  const helperScriptPath = makeHelperScript();
+
   it("fails when output exceeds max buffer in default mode", async () => {
     await expect(
-      runProcess("node", ["-e", "process.stdout.write('x'.repeat(2048))"], { maxBufferBytes: 128 }),
+      runProcess("node", [helperScriptPath, "stdout-bytes", "2048"], { maxBufferBytes: 128 }),
     ).rejects.toThrow("exceeded stdout buffer limit");
   });
 
   it("truncates output when outputMode is truncate", async () => {
-    const result = await runProcess("node", ["-e", "process.stdout.write('x'.repeat(2048))"], {
+    const result = await runProcess("node", [helperScriptPath, "stdout-bytes", "2048"], {
       maxBufferBytes: 128,
       outputMode: "truncate",
     });
@@ -19,6 +58,35 @@ describe("runProcess", () => {
     expect(result.stdout.length).toBeLessThanOrEqual(128);
     expect(result.stdoutTruncated).toBe(true);
     expect(result.stderrTruncated).toBe(false);
+  });
+
+  it("writes stdin before waiting for exit", async () => {
+    const result = await runProcess("node", [helperScriptPath, "stdin-echo"], {
+      stdin: "stdin payload",
+    });
+
+    expect(result.stdout).toBe("stdin payload");
+  });
+
+  it("returns output when non-zero exits are allowed", async () => {
+    const result = await runProcess("node", [helperScriptPath, "stderr-exit", "boom", "2"], {
+      allowNonZeroExit: true,
+    });
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toBe("boom");
+  });
+
+  it("fails on timeout", async () => {
+    await expect(
+      runProcess("node", [helperScriptPath, "sleep", "500"], {
+        timeoutMs: 50,
+      }),
+    ).rejects.toThrow("timed out");
+  });
+
+  afterAll(() => {
+    cleanupHelperScript(helperScriptPath);
   });
 });
 
