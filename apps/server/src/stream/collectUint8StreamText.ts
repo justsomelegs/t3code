@@ -8,7 +8,7 @@ export interface CollectedUint8StreamText {
 }
 
 interface CollectState {
-  readonly parts: string[];
+  readonly chunks: Uint8Array[];
   readonly bytes: number;
   readonly truncated: boolean;
 }
@@ -18,14 +18,13 @@ export const collectUint8StreamText = <E>(input: {
   readonly maxBytes?: number | undefined;
   readonly truncatedMarker?: string | null | undefined;
 }): Effect.Effect<CollectedUint8StreamText, E> => {
-  const decoder = new TextDecoder();
   const maxBytes = input.maxBytes ?? Number.POSITIVE_INFINITY;
   const truncatedMarker = input.truncatedMarker ?? "";
 
   return input.stream.pipe(
     Stream.runFold(
       (): CollectState => ({
-        parts: [],
+        chunks: [],
         bytes: 0,
         truncated: false,
       }),
@@ -36,9 +35,6 @@ export const collectUint8StreamText = <E>(input: {
 
         const remainingBytes = maxBytes - state.bytes;
         if (remainingBytes <= 0) {
-          if (truncatedMarker.length > 0) {
-            state.parts.push(truncatedMarker);
-          }
           return {
             ...state,
             truncated: true,
@@ -47,33 +43,21 @@ export const collectUint8StreamText = <E>(input: {
 
         const nextChunk =
           chunk.byteLength > remainingBytes ? chunk.slice(0, remainingBytes) : chunk;
-        const text = decoder.decode(nextChunk, { stream: true });
-        if (text.length > 0) {
-          state.parts.push(text);
-        }
+        state.chunks.push(nextChunk);
         const bytes = state.bytes + nextChunk.byteLength;
         const truncated = chunk.byteLength > remainingBytes;
-        if (truncated && truncatedMarker.length > 0) {
-          state.parts.push(truncatedMarker);
-        }
 
         return {
-          parts: state.parts,
+          chunks: state.chunks,
           bytes,
           truncated,
         };
       },
     ),
     Effect.map((state): CollectedUint8StreamText => {
-      if (!state.truncated) {
-        const trailingText = decoder.decode();
-        if (trailingText.length > 0) {
-          state.parts.push(trailingText);
-        }
-      }
-
+      const text = Buffer.concat(state.chunks, state.bytes).toString("utf8");
       return {
-        text: state.parts.join(""),
+        text: state.truncated && truncatedMarker.length > 0 ? `${text}${truncatedMarker}` : text,
         bytes: state.bytes,
         truncated: state.truncated,
       };
