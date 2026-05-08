@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Match, PlatformError, Sink, Stream } from "effect";
+import { Context, Duration, Effect, Layer, Option, PlatformError, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -8,7 +8,6 @@ import {
   VcsProcessSpawnError,
   VcsProcessTimeoutError,
 } from "@t3tools/contracts";
-import { runCapturedProcess } from "../capturedProcess.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 
 export interface VcsProcessInput {
@@ -96,10 +95,14 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
       .spawn(
         ChildProcess.make(input.command, [...input.args], {
           cwd: input.cwd,
-          env: {
-            ...process.env,
-            ...input.env,
-          },
+          ...(input.env !== undefined
+            ? {
+                env: {
+                  ...process.env,
+                  ...input.env,
+                },
+              }
+            : {}),
         }),
       )
       .pipe(
@@ -169,77 +172,124 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
       command: label,
       cwd: input.cwd,
     };
-    const result = yield* runCapturedProcess(input.command, [...input.args], {
-      cwd: input.cwd,
-      env: {
-        ...process.env,
-        ...input.env,
-      },
-      ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
-      timeoutMs,
-      maxOutputBytes,
-      outputMode: "truncate",
-      truncatedMarker: input.truncateOutputAtMaxBytes ? OUTPUT_TRUNCATED_MARKER : "",
-      collectorMode: "parts",
-      shell: false,
-    }).pipe(
-      Effect.mapError(
-        (error): VcsError =>
-          Match.valueTags(error, {
-            CapturedProcessSpawnError: ({ cause }) =>
+    const runProcess = Effect.gen(function* () {
+      const child = yield* spawner
+        .spawn(
+          ChildProcess.make(input.command, [...input.args], {
+            cwd: input.cwd,
+            ...(input.env !== undefined
+              ? {
+                  env: {
+                    ...process.env,
+                    ...input.env,
+                  },
+                }
+              : {}),
+          }),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
               new VcsProcessSpawnError({
                 ...baseError,
                 cause,
               }),
-            CapturedProcessStdinError: ({ cause }) =>
-              new VcsOutputDecodeError({
-                ...baseError,
-                detail: "failed to write process stdin",
-                cause,
-              }),
-            CapturedProcessOutputLimitError: ({ stream, maxBytes }) =>
-              new VcsOutputDecodeError({
-                ...baseError,
-                detail: `process ${stream} exceeded ${maxBytes} bytes before truncation could complete`,
-                cause: new Error(`Exceeded ${stream} limit (${maxBytes} bytes).`),
-              }),
-            CapturedProcessTimeoutError: ({ timeoutMs }) =>
+          ),
+        );
+
+      const mapStreamError = (streamName: "stdout" | "stderr") =>
+        Stream.mapError(
+          (cause: PlatformError.PlatformError) =>
+            new VcsOutputDecodeError({
+              ...baseError,
+              detail: `failed to read process ${streamName}`,
+              cause,
+            }),
+        );
+
+      const writeStdin =
+        input.stdin === undefined
+          ? Effect.void
+          : Stream.run(Stream.encodeText(Stream.make(input.stdin)), child.stdin).pipe(
+              Effect.mapError(
+                (cause: PlatformError.PlatformError) =>
+                  new VcsOutputDecodeError({
+                    ...baseError,
+                    detail: "failed to write process stdin",
+                    cause,
+                  }),
+              ),
+            );
+
+      const [stdout, stderr] = yield* Effect.all(
+        [
+          collectText({
+            operation: input.operation,
+            command: label,
+            cwd: input.cwd,
+            stream: child.stdout.pipe(mapStreamError("stdout")),
+            maxOutputBytes,
+            truncateOutputAtMaxBytes: input.truncateOutputAtMaxBytes ?? false,
+          }),
+          collectText({
+            operation: input.operation,
+            command: label,
+            cwd: input.cwd,
+            stream: child.stderr.pipe(mapStreamError("stderr")),
+            maxOutputBytes,
+            truncateOutputAtMaxBytes: input.truncateOutputAtMaxBytes ?? false,
+          }),
+          writeStdin,
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      const exitCode = yield* child.exitCode.pipe(
+        Effect.mapError(
+          (cause: PlatformError.PlatformError) =>
+            new VcsOutputDecodeError({
+              ...baseError,
+              detail: "failed to read process exit code",
+              cause,
+            }),
+        ),
+      );
+
+      if (!input.allowNonZeroExit && exitCode !== 0) {
+        return yield* new VcsProcessExitError({
+          operation: input.operation,
+          command: label,
+          cwd: input.cwd,
+          exitCode,
+          detail: stderr.text.trim() || `${label} exited with code ${exitCode}.`,
+        });
+      }
+
+      return {
+        exitCode,
+        stdout: stdout.text,
+        stderr: stderr.text,
+        stdoutTruncated: stdout.truncated,
+        stderrTruncated: stderr.truncated,
+      } satisfies VcsProcessOutput;
+    });
+
+    return yield* runProcess.pipe(
+      Effect.scoped,
+      Effect.timeoutOption(Duration.millis(timeoutMs)),
+      Effect.flatMap((result) =>
+        Option.match(result, {
+          onSome: Effect.succeed,
+          onNone: () =>
+            Effect.fail(
               new VcsProcessTimeoutError({
                 ...baseError,
                 timeoutMs,
               }),
-          }),
+            ),
+        }),
       ),
     );
-
-    if (result.code === null) {
-      return yield* new VcsOutputDecodeError({
-        ...baseError,
-        detail: `failed to read process exit code${result.signal ? ` (signal: ${result.signal})` : ""}`,
-        cause: new Error(
-          `Process exited without exit code${result.signal ? ` (signal: ${result.signal})` : ""}.`,
-        ),
-      });
-    }
-
-    const exitCode = ChildProcessSpawner.ExitCode(result.code);
-    if (!input.allowNonZeroExit && result.code !== 0) {
-      return yield* new VcsProcessExitError({
-        operation: input.operation,
-        command: label,
-        cwd: input.cwd,
-        exitCode,
-        detail: result.stderr.trim() || `${label} exited with code ${result.code}.`,
-      });
-    }
-
-    return {
-      exitCode,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      stdoutTruncated: result.stdoutTruncated,
-      stderrTruncated: result.stderrTruncated,
-    };
   });
 
   return VcsProcess.of({ withProcess, run });
