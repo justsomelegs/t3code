@@ -21,7 +21,11 @@ const normalizeResolvedPath = (value: string) =>
   normalizePathSeparators(realpathSync.native(value));
 
 const git = (cwd: string, args: ReadonlyArray<string>) =>
-  Effect.promise(() => runProcess("git", ["-C", cwd, ...args]));
+  runProcess({
+    command: "git",
+    args: ["-C", cwd, ...args],
+    shell: process.platform === "win32",
+  });
 
 const makeRepositoryIdentityResolverTestLayer = (options: {
   readonly positiveCacheTtl?: Duration.Input;

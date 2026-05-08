@@ -3,11 +3,15 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { vi } from "vitest";
 
-vi.mock("../../processRunner.ts", () => ({
-  runProcess: vi.fn(),
-}));
+vi.mock("../../processRunner.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../processRunner.ts")>();
+  return {
+    ...actual,
+    runProcess: vi.fn(),
+  };
+});
 
-import { runProcess } from "../../processRunner.ts";
+import { ProcessSpawnError, runProcess } from "../../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 
 const mockedRunProcess = vi.mocked(runProcess);
@@ -32,13 +36,17 @@ describe("resolveServerEnvironmentLabel", () => {
 
   it.effect("prefers the macOS ComputerName", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: " Julius's MacBook Pro \n",
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockReturnValueOnce(
+        Effect.succeed({
+          stdout: " Julius's MacBook Pro \n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        }),
+      );
 
       const result = yield* resolveServerEnvironmentLabel({
         cwdBaseName: "t3code",
@@ -48,9 +56,11 @@ describe("resolveServerEnvironmentLabel", () => {
 
       expect(result).toBe("Julius's MacBook Pro");
       expect(mockedRunProcess).toHaveBeenCalledWith(
-        "scutil",
-        ["--get", "ComputerName"],
-        expect.objectContaining({ allowNonZeroExit: true }),
+        expect.objectContaining({
+          command: "scutil",
+          args: ["--get", "ComputerName"],
+          timeoutBehavior: "result",
+        }),
       );
     }),
   );
@@ -80,13 +90,17 @@ describe("resolveServerEnvironmentLabel", () => {
 
   it.effect("falls back to hostnamectl pretty hostname on Linux", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: "CI Runner\n",
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockReturnValueOnce(
+        Effect.succeed({
+          stdout: "CI Runner\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        }),
+      );
 
       const result = yield* resolveServerEnvironmentLabel({
         cwdBaseName: "t3code",
@@ -96,9 +110,11 @@ describe("resolveServerEnvironmentLabel", () => {
 
       expect(result).toBe("CI Runner");
       expect(mockedRunProcess).toHaveBeenCalledWith(
-        "hostnamectl",
-        ["--pretty"],
-        expect.objectContaining({ allowNonZeroExit: true }),
+        expect.objectContaining({
+          command: "hostnamectl",
+          args: ["--pretty"],
+          timeoutBehavior: "result",
+        }),
       );
     }),
   );
@@ -117,7 +133,15 @@ describe("resolveServerEnvironmentLabel", () => {
 
   it.effect("falls back to the hostname when the friendly-label command is missing", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockRejectedValueOnce(new Error("spawn scutil ENOENT"));
+      mockedRunProcess.mockReturnValueOnce(
+        Effect.fail(
+          new ProcessSpawnError({
+            command: "scutil",
+            args: ["--get", "ComputerName"],
+            cause: new Error("spawn scutil ENOENT"),
+          }),
+        ),
+      );
 
       const result = yield* resolveServerEnvironmentLabel({
         cwdBaseName: "t3code",
@@ -131,13 +155,17 @@ describe("resolveServerEnvironmentLabel", () => {
 
   it.effect("falls back to the cwd basename when the hostname is blank", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: " ",
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockReturnValueOnce(
+        Effect.succeed({
+          stdout: " ",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        }),
+      );
 
       const result = yield* resolveServerEnvironmentLabel({
         cwdBaseName: "t3code",

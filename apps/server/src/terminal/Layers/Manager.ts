@@ -363,60 +363,68 @@ function checkWindowsSubprocessActivity(
     "if ($children) { exit 0 }",
     "exit 1",
   ].join("; ");
-  return Effect.tryPromise({
-    try: () =>
-      runProcess("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
-        timeoutMs: 1_500,
-        allowNonZeroExit: true,
-        maxBufferBytes: 32_768,
-        outputMode: "truncate",
-      }),
-    catch: (cause) =>
-      new TerminalSubprocessCheckError({
-        message: "Failed to check Windows terminal subprocess activity.",
-        cause,
-        terminalPid,
-        command: "powershell",
-      }),
-  }).pipe(Effect.map((result) => result.code === 0));
+  return runProcess({
+    command: "powershell.exe",
+    args: ["-NoProfile", "-NonInteractive", "-Command", command],
+    timeoutMs: 1_500,
+    maxOutputBytes: 32_768,
+    outputMode: "truncate",
+    shell: process.platform === "win32",
+    timeoutBehavior: "result",
+  }).pipe(
+    Effect.map((result) => result.code === 0),
+    Effect.mapError(
+      (cause) =>
+        new TerminalSubprocessCheckError({
+          message: "Failed to check Windows terminal subprocess activity.",
+          cause,
+          terminalPid,
+          command: "powershell",
+        }),
+    ),
+  );
 }
 
 const checkPosixSubprocessActivity = Effect.fn("terminal.checkPosixSubprocessActivity")(function* (
   terminalPid: number,
 ): Effect.fn.Return<boolean, TerminalSubprocessCheckError> {
-  const runPgrep = Effect.tryPromise({
-    try: () =>
-      runProcess("pgrep", ["-P", String(terminalPid)], {
-        timeoutMs: 1_000,
-        allowNonZeroExit: true,
-        maxBufferBytes: 32_768,
-        outputMode: "truncate",
-      }),
-    catch: (cause) =>
-      new TerminalSubprocessCheckError({
-        message: "Failed to inspect terminal subprocesses with pgrep.",
-        cause,
-        terminalPid,
-        command: "pgrep",
-      }),
-  });
+  const runPgrep = runProcess({
+    command: "pgrep",
+    args: ["-P", String(terminalPid)],
+    timeoutMs: 1_000,
+    maxOutputBytes: 32_768,
+    outputMode: "truncate",
+    timeoutBehavior: "result",
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new TerminalSubprocessCheckError({
+          message: "Failed to inspect terminal subprocesses with pgrep.",
+          cause,
+          terminalPid,
+          command: "pgrep",
+        }),
+    ),
+  );
 
-  const runPs = Effect.tryPromise({
-    try: () =>
-      runProcess("ps", ["-eo", "pid=,ppid="], {
-        timeoutMs: 1_000,
-        allowNonZeroExit: true,
-        maxBufferBytes: 262_144,
-        outputMode: "truncate",
-      }),
-    catch: (cause) =>
-      new TerminalSubprocessCheckError({
-        message: "Failed to inspect terminal subprocesses with ps.",
-        cause,
-        terminalPid,
-        command: "ps",
-      }),
-  });
+  const runPs = runProcess({
+    command: "ps",
+    args: ["-eo", "pid=,ppid="],
+    timeoutMs: 1_000,
+    maxOutputBytes: 262_144,
+    outputMode: "truncate",
+    timeoutBehavior: "result",
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new TerminalSubprocessCheckError({
+          message: "Failed to inspect terminal subprocesses with ps.",
+          cause,
+          terminalPid,
+          command: "ps",
+        }),
+    ),
+  );
 
   const pgrepResult = yield* Effect.exit(runPgrep);
   if (pgrepResult._tag === "Success") {

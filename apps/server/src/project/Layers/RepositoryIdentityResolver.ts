@@ -83,50 +83,50 @@ interface RepositoryIdentityResolverOptions {
   readonly negativeCacheTtl?: Duration.Input;
 }
 
-async function resolveRepositoryIdentityCacheKey(cwd: string): Promise<string> {
+const resolveRepositoryIdentityCacheKey = Effect.fn("resolveRepositoryIdentityCacheKey")(function* (
+  cwd: string,
+) {
   let cacheKey = cwd;
 
-  try {
-    const topLevelResult = await runProcess("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
-      allowNonZeroExit: true,
-    });
-    if (topLevelResult.code !== 0) {
-      return cacheKey;
-    }
-
-    const candidate = topLevelResult.stdout.trim();
-    if (candidate.length > 0) {
-      cacheKey = candidate;
-    }
-  } catch {
+  const topLevelResult = yield* runProcess({
+    command: "git",
+    args: ["-C", cwd, "rev-parse", "--show-toplevel"],
+    timeoutBehavior: "result",
+    shell: process.platform === "win32",
+  }).pipe(Effect.option);
+  if (topLevelResult._tag === "None" || topLevelResult.value.code !== 0) {
     return cacheKey;
   }
 
-  return cacheKey;
-}
+  const candidate = topLevelResult.value.stdout.trim();
+  if (candidate.length > 0) {
+    cacheKey = candidate;
+  }
 
-async function resolveRepositoryIdentityFromCacheKey(
-  cacheKey: string,
-): Promise<RepositoryIdentity | null> {
-  try {
-    const remoteResult = await runProcess("git", ["-C", cacheKey, "remote", "-v"], {
-      allowNonZeroExit: true,
-    });
-    if (remoteResult.code !== 0) {
+  return cacheKey;
+});
+
+const resolveRepositoryIdentityFromCacheKey = Effect.fn("resolveRepositoryIdentityFromCacheKey")(
+  function* (cacheKey: string): Effect.fn.Return<RepositoryIdentity | null> {
+    const remoteResult = yield* runProcess({
+      command: "git",
+      args: ["-C", cacheKey, "remote", "-v"],
+      timeoutBehavior: "result",
+      shell: process.platform === "win32",
+    }).pipe(Effect.option);
+    if (remoteResult._tag === "None" || remoteResult.value.code !== 0) {
       return null;
     }
 
-    const remote = pickPrimaryRemote(parseRemoteFetchUrls(remoteResult.stdout));
+    const remote = pickPrimaryRemote(parseRemoteFetchUrls(remoteResult.value.stdout));
     return remote ? buildRepositoryIdentity({ ...remote, rootPath: cacheKey }) : null;
-  } catch {
-    return null;
-  }
-}
+  },
+);
 
 export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityResolver")(
   function* (options: RepositoryIdentityResolverOptions = {}) {
     const repositoryIdentityCache = yield* Cache.makeWith<string, RepositoryIdentity | null>(
-      (cacheKey) => Effect.promise(() => resolveRepositoryIdentityFromCacheKey(cacheKey)),
+      (cacheKey) => resolveRepositoryIdentityFromCacheKey(cacheKey),
       {
         capacity: options.cacheCapacity ?? DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY,
         timeToLive: Exit.match({
@@ -142,7 +142,7 @@ export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityR
     const resolve: RepositoryIdentityResolverShape["resolve"] = Effect.fn(
       "RepositoryIdentityResolver.resolve",
     )(function* (cwd) {
-      const cacheKey = yield* Effect.promise(() => resolveRepositoryIdentityCacheKey(cwd));
+      const cacheKey = yield* resolveRepositoryIdentityCacheKey(cwd);
       return yield* Cache.get(repositoryIdentityCache, cacheKey);
     });
 

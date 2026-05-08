@@ -2,9 +2,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Effect } from "effect";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { isWindowsCommandNotFound, runProcess } from "./processRunner.ts";
+import {
+  isWindowsCommandNotFound,
+  ProcessOutputLimitError,
+  ProcessTimeoutError,
+  runProcess,
+} from "./processRunner.ts";
 
 function makeHelperScript(): string {
   const directory = mkdtempSync(path.join(os.tmpdir(), "t3-process-runner-test-"));
@@ -42,17 +49,40 @@ function cleanupHelperScript(helperPath: string) {
 describe("runProcess", () => {
   const helperScriptPath = makeHelperScript();
 
+  it("supports the new Effect-native API", async () => {
+    const result = await Effect.runPromise(
+      runProcess({
+        command: "node",
+        args: [helperScriptPath, "stdout-bytes", "32"],
+      }).pipe(Effect.provide(NodeServices.layer)),
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("x".repeat(32));
+    expect(result.timedOut).toBe(false);
+  });
+
   it("fails when output exceeds max buffer in default mode", async () => {
     await expect(
-      runProcess("node", [helperScriptPath, "stdout-bytes", "2048"], { maxBufferBytes: 128 }),
-    ).rejects.toThrow("exceeded stdout buffer limit");
+      Effect.runPromise(
+        runProcess({
+          command: "node",
+          args: [helperScriptPath, "stdout-bytes", "2048"],
+          maxOutputBytes: 128,
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    ).rejects.toBeInstanceOf(ProcessOutputLimitError);
   });
 
   it("truncates output when outputMode is truncate", async () => {
-    const result = await runProcess("node", [helperScriptPath, "stdout-bytes", "2048"], {
-      maxBufferBytes: 128,
-      outputMode: "truncate",
-    });
+    const result = await Effect.runPromise(
+      runProcess({
+        command: "node",
+        args: [helperScriptPath, "stdout-bytes", "2048"],
+        maxOutputBytes: 128,
+        outputMode: "truncate",
+      }).pipe(Effect.provide(NodeServices.layer)),
+    );
 
     expect(result.code).toBe(0);
     expect(result.stdout.length).toBeLessThanOrEqual(128);
@@ -61,17 +91,24 @@ describe("runProcess", () => {
   });
 
   it("writes stdin before waiting for exit", async () => {
-    const result = await runProcess("node", [helperScriptPath, "stdin-echo"], {
-      stdin: "stdin payload",
-    });
+    const result = await Effect.runPromise(
+      runProcess({
+        command: "node",
+        args: [helperScriptPath, "stdin-echo"],
+        stdin: "stdin payload",
+      }).pipe(Effect.provide(NodeServices.layer)),
+    );
 
     expect(result.stdout).toBe("stdin payload");
   });
 
-  it("returns output when non-zero exits are allowed", async () => {
-    const result = await runProcess("node", [helperScriptPath, "stderr-exit", "boom", "2"], {
-      allowNonZeroExit: true,
-    });
+  it("returns output for non-zero exit codes", async () => {
+    const result = await Effect.runPromise(
+      runProcess({
+        command: "node",
+        args: [helperScriptPath, "stderr-exit", "boom", "2"],
+      }).pipe(Effect.provide(NodeServices.layer)),
+    );
 
     expect(result.code).toBe(2);
     expect(result.stderr).toBe("boom");
@@ -79,17 +116,25 @@ describe("runProcess", () => {
 
   it("fails on timeout", async () => {
     await expect(
-      runProcess("node", [helperScriptPath, "sleep", "500"], {
-        timeoutMs: 50,
-      }),
-    ).rejects.toThrow("timed out");
+      Effect.runPromise(
+        runProcess({
+          command: "node",
+          args: [helperScriptPath, "sleep", "500"],
+          timeoutMs: 50,
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    ).rejects.toBeInstanceOf(ProcessTimeoutError);
   });
 
-  it("returns a timed out result when non-zero exits are allowed", async () => {
-    const result = await runProcess("node", [helperScriptPath, "sleep", "500"], {
-      timeoutMs: 50,
-      allowNonZeroExit: true,
-    });
+  it("returns a timed out result when timeoutBehavior is result", async () => {
+    const result = await Effect.runPromise(
+      runProcess({
+        command: "node",
+        args: [helperScriptPath, "sleep", "500"],
+        timeoutMs: 50,
+        timeoutBehavior: "result",
+      }).pipe(Effect.provide(NodeServices.layer)),
+    );
 
     expect(result.timedOut).toBe(true);
   });

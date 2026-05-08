@@ -52,19 +52,18 @@ const runFriendlyLabelCommand = Effect.fn("runFriendlyLabelCommand")(function* (
   command: string,
   args: readonly string[],
 ) {
-  const result = yield* Effect.tryPromise({
-    try: () =>
-      runProcess(command, args, {
-        allowNonZeroExit: true,
-      }),
-    catch: () => null,
-  }).pipe(Effect.orElseSucceed(() => null));
+  const result = yield* runProcess({
+    command,
+    args,
+    timeoutBehavior: "result",
+    shell: process.platform === "win32",
+  }).pipe(Effect.option);
 
-  if (!result || result.code !== 0) {
+  if (result._tag === "None" || result.value.code !== 0) {
     return null;
   }
 
-  return normalizeLabel(result.stdout);
+  return normalizeLabel(result.value.stdout);
 });
 
 const resolveFriendlyHostLabel = Effect.fn("resolveFriendlyHostLabel")(function* (

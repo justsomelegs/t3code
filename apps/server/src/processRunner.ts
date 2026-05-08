@@ -1,43 +1,80 @@
-import { Effect, Match } from "effect";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Data, Duration, Effect, Option, PlatformError, Scope, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { runCapturedProcess } from "./capturedProcess.ts";
+import { collectUint8StreamText } from "./stream/collectUint8StreamText.ts";
 
-export interface ProcessRunOptions {
-  cwd?: string | undefined;
-  timeoutMs?: number | undefined;
-  env?: NodeJS.ProcessEnv | undefined;
-  stdin?: string | undefined;
-  allowNonZeroExit?: boolean | undefined;
-  maxBufferBytes?: number | undefined;
-  outputMode?: "error" | "truncate" | undefined;
+export interface ProcessRunInput {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly spawnCwd?: string | undefined;
+  readonly timeoutMs?: number | undefined;
+  readonly env?: NodeJS.ProcessEnv | undefined;
+  readonly stdin?: string | undefined;
+  readonly maxOutputBytes?: number | undefined;
+  readonly outputMode?: "error" | "truncate" | undefined;
+  readonly truncatedMarker?: string | undefined;
+  readonly shell?: boolean | string | undefined;
+  readonly timeoutBehavior?: "error" | "result" | undefined;
 }
 
-export interface ProcessRunResult {
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  timedOut: boolean;
-  stdoutTruncated?: boolean | undefined;
-  stderrTruncated?: boolean | undefined;
+export interface ProcessRunOutput {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly timedOut: boolean;
+  readonly stdoutTruncated: boolean;
+  readonly stderrTruncated: boolean;
 }
 
-function commandLabel(command: string, args: readonly string[]): string {
-  return [command, ...args].join(" ");
-}
+export class ProcessSpawnError extends Data.TaggedError("ProcessSpawnError")<{
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly cause: unknown;
+}> {}
 
-function normalizeSpawnError(command: string, args: readonly string[], error: unknown): Error {
-  if (!(error instanceof Error)) {
-    return new Error(`Failed to run ${commandLabel(command, args)}.`);
-  }
+export class ProcessStdinError extends Data.TaggedError("ProcessStdinError")<{
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly cause: unknown;
+}> {}
 
-  const maybeCode = (error as NodeJS.ErrnoException).code;
-  if (maybeCode === "ENOENT") {
-    return new Error(`Command not found: ${command}`);
-  }
+export class ProcessOutputLimitError extends Data.TaggedError("ProcessOutputLimitError")<{
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly stream: "stdout" | "stderr";
+  readonly maxBytes: number;
+}> {}
 
-  return new Error(`Failed to run ${commandLabel(command, args)}: ${error.message}`);
-}
+export class ProcessReadError extends Data.TaggedError("ProcessReadError")<{
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly stream: "stdout" | "stderr" | "exitCode";
+  readonly cause: unknown;
+}> {}
+
+export class ProcessTimeoutError extends Data.TaggedError("ProcessTimeoutError")<{
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly timeoutMs: number;
+}> {}
+
+export type ProcessRunError =
+  | ProcessSpawnError
+  | ProcessStdinError
+  | ProcessOutputLimitError
+  | ProcessReadError
+  | ProcessTimeoutError;
+
+const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 const WINDOWS_COMMAND_NOT_FOUND_PATTERNS = [
   /is not recognized as an internal or external command/i,
@@ -58,85 +95,185 @@ export function isWindowsCommandNotFound(code: number | null, stderr: string): b
   return hasWindowsCommandNotFoundMessage(stderr);
 }
 
-function normalizeExitError(
-  command: string,
-  args: readonly string[],
-  result: ProcessRunResult,
-): Error {
-  if (isWindowsCommandNotFound(result.code, result.stderr)) {
-    return new Error(`Command not found: ${command}`);
-  }
-
-  const reason = result.timedOut
-    ? "timed out"
-    : `failed (code=${result.code ?? "null"}, signal=${result.signal ?? "null"})`;
-  const stderr = result.stderr.trim();
-  const detail = stderr.length > 0 ? ` ${stderr}` : "";
-  return new Error(`${commandLabel(command, args)} ${reason}.${detail}`);
-}
-
-function normalizeStdinError(command: string, args: readonly string[], error: unknown): Error {
-  if (!(error instanceof Error)) {
-    return new Error(`Failed to write stdin for ${commandLabel(command, args)}.`);
-  }
-  return new Error(`Failed to write stdin for ${commandLabel(command, args)}: ${error.message}`);
-}
-
-function normalizeBufferError(
-  command: string,
-  args: readonly string[],
-  stream: "stdout" | "stderr",
-  maxBufferBytes: number,
-): Error {
-  return new Error(
-    `${commandLabel(command, args)} exceeded ${stream} buffer limit (${maxBufferBytes} bytes).`,
-  );
-}
-
-const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
-
-export async function runProcess(
-  command: string,
-  args: readonly string[],
-  options: ProcessRunOptions = {},
-): Promise<ProcessRunResult> {
-  const timeoutMs = options.timeoutMs ?? 60_000;
-  const maxBufferBytes = options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
-  const outputMode = options.outputMode ?? "error";
-  const result = await Effect.runPromise(
-    runCapturedProcess(command, args, {
-      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-      timeoutMs,
-      ...(options.env !== undefined ? { env: options.env } : {}),
-      ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
-      maxOutputBytes: maxBufferBytes,
-      outputMode,
-      shell: process.platform === "win32",
-      collectorMode: "concat",
-      timeoutBehavior: "result",
-    }).pipe(
-      Effect.mapError((error) =>
-        Match.valueTags(error, {
-          CapturedProcessSpawnError: ({ cause }) => normalizeSpawnError(command, args, cause),
-          CapturedProcessStdinError: ({ cause }) => normalizeStdinError(command, args, cause),
-          CapturedProcessOutputLimitError: ({ stream, maxBytes }) =>
-            normalizeBufferError(command, args, stream, maxBytes),
-          CapturedProcessTimeoutError: () => new Error(`${commandLabel(command, args)} timed out.`),
-        }),
+const collectText = Effect.fn("processRunner.collectText")(function* (input: {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly streamName: "stdout" | "stderr";
+  readonly stream: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
+  readonly maxOutputBytes: number;
+  readonly outputMode: "error" | "truncate";
+  readonly truncatedMarker: string;
+}) {
+  const result = yield* collectUint8StreamText({
+    stream: input.stream.pipe(
+      Stream.mapError(
+        (cause) =>
+          new ProcessReadError({
+            command: input.command,
+            args: input.args,
+            cwd: input.cwd,
+            stream: input.streamName,
+            cause,
+          }),
       ),
     ),
-  );
+    maxBytes: input.maxOutputBytes,
+    truncatedMarker: input.outputMode === "truncate" ? input.truncatedMarker : null,
+  });
 
-  const normalizedResult: ProcessRunResult = {
-    ...result,
-  };
-
-  if (
-    !options.allowNonZeroExit &&
-    (normalizedResult.timedOut || (normalizedResult.code !== null && normalizedResult.code !== 0))
-  ) {
-    throw normalizeExitError(command, args, normalizedResult);
+  if (input.outputMode === "error" && result.truncated) {
+    return yield* new ProcessOutputLimitError({
+      command: input.command,
+      args: input.args,
+      cwd: input.cwd,
+      stream: input.streamName,
+      maxBytes: input.maxOutputBytes,
+    });
   }
 
-  return normalizedResult;
-}
+  return result;
+});
+
+export const runProcess = Effect.fn("processRunner.runProcess")(
+  function* (
+    input: ProcessRunInput,
+  ): Effect.fn.Return<
+    ProcessRunOutput,
+    ProcessRunError,
+    ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+  > {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+    const outputMode = input.outputMode ?? "error";
+    const truncatedMarker = input.truncatedMarker ?? "";
+
+    const child = yield* spawner
+      .spawn(
+        ChildProcess.make(input.command, [...input.args], {
+          ...((input.spawnCwd ?? input.cwd)
+            ? {
+                cwd: input.spawnCwd ?? input.cwd,
+              }
+            : {}),
+          ...(input.env !== undefined
+            ? {
+                env: input.env,
+                extendEnv: true,
+              }
+            : {}),
+          ...(input.shell !== undefined ? { shell: input.shell } : {}),
+        }),
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProcessSpawnError({
+              command: input.command,
+              args: input.args,
+              cwd: input.cwd,
+              cause,
+            }),
+        ),
+      );
+
+    const writeStdin =
+      input.stdin === undefined
+        ? Effect.void
+        : Stream.run(Stream.encodeText(Stream.make(input.stdin)), child.stdin).pipe(
+            Effect.mapError(
+              (cause: PlatformError.PlatformError) =>
+                new ProcessStdinError({
+                  command: input.command,
+                  args: input.args,
+                  cwd: input.cwd,
+                  cause,
+                }),
+            ),
+          );
+
+    const [stdout, stderr] = yield* Effect.all(
+      [
+        collectText({
+          command: input.command,
+          args: input.args,
+          cwd: input.cwd,
+          streamName: "stdout",
+          stream: child.stdout,
+          maxOutputBytes,
+          outputMode,
+          truncatedMarker,
+        }),
+        collectText({
+          command: input.command,
+          args: input.args,
+          cwd: input.cwd,
+          streamName: "stderr",
+          stream: child.stderr,
+          maxOutputBytes,
+          outputMode,
+          truncatedMarker,
+        }),
+        writeStdin,
+      ],
+      { concurrency: "unbounded" },
+    );
+
+    const exitCode = yield* child.exitCode.pipe(
+      Effect.mapError(
+        (cause: PlatformError.PlatformError) =>
+          new ProcessReadError({
+            command: input.command,
+            args: input.args,
+            cwd: input.cwd,
+            stream: "exitCode",
+            cause,
+          }),
+      ),
+    );
+
+    return {
+      stdout: stdout.text,
+      stderr: stderr.text,
+      code: exitCode,
+      signal: null,
+      timedOut: false,
+      stdoutTruncated: stdout.truncated,
+      stderrTruncated: stderr.truncated,
+    } satisfies ProcessRunOutput;
+  },
+  (effect, input) => {
+    const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutBehavior = input.timeoutBehavior ?? "error";
+
+    return effect.pipe(
+      Effect.scoped,
+      Effect.timeoutOption(Duration.millis(timeoutMs)),
+      Effect.flatMap((result) => {
+        if (Option.isSome(result)) {
+          return Effect.succeed(result.value);
+        }
+        if (timeoutBehavior === "result") {
+          return Effect.succeed({
+            stdout: "",
+            stderr: "",
+            code: null,
+            signal: null,
+            timedOut: true,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          } satisfies ProcessRunOutput);
+        }
+        return Effect.fail(
+          new ProcessTimeoutError({
+            command: input.command,
+            args: input.args,
+            cwd: input.cwd,
+            timeoutMs,
+          }),
+        );
+      }),
+      Effect.provide(NodeServices.layer),
+    );
+  },
+);
