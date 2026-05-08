@@ -33,6 +33,9 @@ function makeHelperScript(): string {
       "  process.exit(Number(process.argv[4] ?? '0'));",
       "} else if (mode === 'sleep') {",
       "  setTimeout(() => process.stdout.write('late'), Number(process.argv[3] ?? '0'));",
+      "} else if (mode === 'spam-stdout') {",
+      "  const chunk = 'x'.repeat(Number(process.argv[3] ?? '64'));",
+      "  setInterval(() => { process.stdout.write(chunk); }, Number(process.argv[4] ?? '5'));",
       "} else {",
       "  process.exit(2);",
       "}",
@@ -108,6 +111,19 @@ describe("runProcess", () => {
           command: "node",
           args: [helperScriptPath, "stdout-bytes", "2048"],
           maxOutputBytes: 128,
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    ).rejects.toBeInstanceOf(ProcessOutputLimitError);
+  });
+
+  it("fails fast on output limit before timeout for long-running output", async () => {
+    await expect(
+      Effect.runPromise(
+        runProcess({
+          command: "node",
+          args: [helperScriptPath, "spam-stdout", "64", "5"],
+          maxOutputBytes: 128,
+          timeoutMs: 2_000,
         }).pipe(Effect.provide(NodeServices.layer)),
       ),
     ).rejects.toBeInstanceOf(ProcessOutputLimitError);

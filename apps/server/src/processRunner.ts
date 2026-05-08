@@ -1,7 +1,10 @@
 import { Data, Duration, Effect, Option, PlatformError, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { collectUint8StreamText } from "./stream/collectUint8StreamText.ts";
+import {
+  collectUint8StreamText,
+  type CollectedUint8StreamText,
+} from "./stream/collectUint8StreamText.ts";
 
 export interface ProcessRunInput {
   readonly command: string;
@@ -107,34 +110,68 @@ const collectText = Effect.fn("processRunner.collectText")(function* (input: {
   readonly outputMode: "error" | "truncate";
   readonly truncatedMarker: string;
 }) {
-  const result = yield* collectUint8StreamText({
-    stream: input.stream.pipe(
-      Stream.mapError(
-        (cause) =>
-          new ProcessReadError({
-            command: input.command,
-            args: input.args,
-            cwd: input.cwd,
-            stream: input.streamName,
-            cause,
-          }),
-      ),
+  const stream = input.stream.pipe(
+    Stream.mapError(
+      (cause) =>
+        new ProcessReadError({
+          command: input.command,
+          args: input.args,
+          cwd: input.cwd,
+          stream: input.streamName,
+          cause,
+        }),
     ),
-    maxBytes: input.maxOutputBytes,
-    truncatedMarker: input.outputMode === "truncate" ? input.truncatedMarker : null,
-  });
+  );
 
-  if (input.outputMode === "error" && result.truncated) {
-    return yield* new ProcessOutputLimitError({
-      command: input.command,
-      args: input.args,
-      cwd: input.cwd,
-      stream: input.streamName,
+  if (input.outputMode === "truncate") {
+    return yield* collectUint8StreamText({
+      stream,
       maxBytes: input.maxOutputBytes,
+      truncatedMarker: input.truncatedMarker,
     });
   }
 
-  return result;
+  return yield* stream.pipe(
+    Stream.runFoldEffect(
+      (): { readonly chunks: Uint8Array[]; readonly bytes: number } => ({
+        chunks: [],
+        bytes: 0,
+      }),
+      (
+        state,
+        chunk,
+      ): Effect.Effect<
+        { readonly chunks: Uint8Array[]; readonly bytes: number },
+        ProcessOutputLimitError | ProcessReadError
+      > => {
+        const remainingBytes = input.maxOutputBytes - state.bytes;
+        if (remainingBytes <= 0 || chunk.byteLength > remainingBytes) {
+          return Effect.fail(
+            new ProcessOutputLimitError({
+              command: input.command,
+              args: input.args,
+              cwd: input.cwd,
+              stream: input.streamName,
+              maxBytes: input.maxOutputBytes,
+            }),
+          );
+        }
+
+        state.chunks.push(chunk);
+        return Effect.succeed({
+          chunks: state.chunks,
+          bytes: state.bytes + chunk.byteLength,
+        });
+      },
+    ),
+    Effect.map(
+      (state): CollectedUint8StreamText => ({
+        text: Buffer.concat(state.chunks, state.bytes).toString("utf8"),
+        bytes: state.bytes,
+        truncated: false,
+      }),
+    ),
+  );
 });
 
 export const runProcess = Effect.fn("processRunner.runProcess")(

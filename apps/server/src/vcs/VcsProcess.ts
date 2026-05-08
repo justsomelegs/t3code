@@ -1,5 +1,5 @@
-import { Context, Effect, Layer, PlatformError, Sink, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Context, Effect, Layer } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   VcsOutputDecodeError,
@@ -16,7 +16,6 @@ import {
   ProcessStdinError,
   ProcessTimeoutError,
 } from "../processRunner.ts";
-import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 
 export interface VcsProcessInput {
   readonly operation: string;
@@ -40,25 +39,7 @@ export interface VcsProcessOutput {
   readonly stderrTruncated: boolean;
 }
 
-export interface VcsProcessCollectedText {
-  readonly text: string;
-  readonly truncated: boolean;
-}
-
-export interface VcsProcessHandle {
-  readonly pid: ChildProcessSpawner.ProcessId;
-  readonly stdin: Sink.Sink<void, Uint8Array, never, VcsError>;
-  readonly stdout: Stream.Stream<Uint8Array, VcsError>;
-  readonly stderr: Stream.Stream<Uint8Array, VcsError>;
-  readonly exitCode: Effect.Effect<ChildProcessSpawner.ExitCode, VcsError>;
-  readonly writeStdin: (input: string) => Effect.Effect<void, VcsError>;
-}
-
 export interface VcsProcessShape {
-  readonly withProcess: <A, E, R>(
-    input: VcsProcessInput,
-    use: (handle: VcsProcessHandle) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | VcsError, R>;
   readonly run: (input: VcsProcessInput) => Effect.Effect<VcsProcessOutput, VcsError>;
 }
 
@@ -74,103 +55,8 @@ function commandLabel(command: string, args: ReadonlyArray<string>): string {
   return [command, ...args].join(" ");
 }
 
-export const collectText = Effect.fn("VcsProcess.collectText")(function* (input: {
-  readonly operation: string;
-  readonly command: string;
-  readonly cwd: string;
-  readonly stream: Stream.Stream<Uint8Array, VcsError>;
-  readonly maxOutputBytes?: number;
-  readonly appendTruncationMarker?: boolean;
-}) {
-  const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-  return yield* collectUint8StreamText({
-    stream: input.stream,
-    maxBytes: maxOutputBytes,
-    truncatedMarker: input.appendTruncationMarker ? OUTPUT_TRUNCATED_MARKER : null,
-  });
-});
-
 export const make = Effect.fn("makeVcsProcess")(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-
-  const spawn = Effect.fn("VcsProcess.spawn")(function* (input: VcsProcessInput) {
-    const label = commandLabel(input.command, input.args);
-    const baseError = {
-      operation: input.operation,
-      command: label,
-      cwd: input.cwd,
-    };
-    const child = yield* spawner
-      .spawn(
-        ChildProcess.make(input.command, [...input.args], {
-          cwd: input.spawnCwd ?? input.cwd,
-          ...(input.env !== undefined
-            ? {
-                env: {
-                  ...process.env,
-                  ...input.env,
-                },
-              }
-            : {}),
-        }),
-      )
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new VcsProcessSpawnError({
-              operation: input.operation,
-              command: label,
-              cwd: input.cwd,
-              cause,
-            }),
-        ),
-      );
-    yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
-
-    const mapStreamError = (streamName: "stdout" | "stderr") =>
-      Stream.mapError(
-        (cause: PlatformError.PlatformError) =>
-          new VcsOutputDecodeError({
-            ...baseError,
-            detail: `failed to read process ${streamName}`,
-            cause,
-          }),
-      );
-    const mapEffectError = (detail: string) =>
-      Effect.mapError(
-        (cause: PlatformError.PlatformError) =>
-          new VcsOutputDecodeError({
-            ...baseError,
-            detail,
-            cause,
-          }),
-      );
-    const writeStdin = (stdin: string) =>
-      Stream.run(Stream.encodeText(Stream.make(stdin)), child.stdin).pipe(
-        mapEffectError("failed to write process stdin"),
-      );
-
-    return {
-      pid: child.pid,
-      stdin: child.stdin.pipe(
-        Sink.mapError(
-          (cause) =>
-            new VcsOutputDecodeError({
-              ...baseError,
-              detail: "failed to write process stdin",
-              cause,
-            }),
-        ),
-      ),
-      stdout: child.stdout.pipe(mapStreamError("stdout")),
-      stderr: child.stderr.pipe(mapStreamError("stderr")),
-      exitCode: child.exitCode.pipe(mapEffectError("failed to read process exit code")),
-      writeStdin,
-    } satisfies VcsProcessHandle;
-  });
-
-  const withProcess: VcsProcessShape["withProcess"] = (input, use) =>
-    Effect.scoped(spawn(input).pipe(Effect.flatMap(use)));
 
   const run = Effect.fn("VcsProcess.run")(function* (input: VcsProcessInput) {
     const label = commandLabel(input.command, input.args);
@@ -262,7 +148,7 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
     } satisfies VcsProcessOutput;
   });
 
-  return VcsProcess.of({ withProcess, run });
+  return VcsProcess.of({ run });
 });
 
 export const layer = Layer.effect(VcsProcess, make());
