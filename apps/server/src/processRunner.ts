@@ -1,4 +1,3 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Data, Duration, Effect, Option, PlatformError, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -273,7 +272,6 @@ export const runProcess = Effect.fn("processRunner.runProcess")(
           }),
         );
       }),
-      Effect.provide(NodeServices.layer),
     );
   },
 );

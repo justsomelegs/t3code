@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect } from "effect";
+import { Effect, Sink, Stream } from "effect";
 import { afterAll, describe, expect, it } from "vitest";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   isWindowsCommandNotFound,
@@ -60,6 +61,44 @@ describe("runProcess", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("x".repeat(32));
     expect(result.timedOut).toBe(false);
+  });
+
+  it("supports an injected ChildProcessSpawner service", async () => {
+    const fakeSpawner = ChildProcessSpawner.make((command) => {
+      const childProcess = command as unknown as {
+        readonly command: string;
+        readonly args: ReadonlyArray<string>;
+      };
+
+      expect(childProcess.command).toBe("fake");
+      expect(childProcess.args).toEqual(["--ok"]);
+
+      return Effect.succeed(
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.make(new TextEncoder().encode("ok")),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        }),
+      );
+    });
+
+    const result = await Effect.runPromise(
+      runProcess({
+        command: "fake",
+        args: ["--ok"],
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fakeSpawner)),
+    );
+
+    expect(result.stdout).toBe("ok");
+    expect(result.code).toBe(0);
   });
 
   it("fails when output exceeds max buffer in default mode", async () => {

@@ -8,14 +8,10 @@ import {
   TurnId,
   type OrchestrationEvent,
   ProviderInstanceId,
+  type OrchestrationReadModel,
 } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Metric from "effect/Metric";
-import * as Option from "effect/Option";
-import * as Queue from "effect/Queue";
-import * as Stream from "effect/Stream";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Effect, Layer, ManagedRuntime, Metric, Option, Queue, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
@@ -37,7 +33,6 @@ import {
 } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
@@ -74,7 +69,7 @@ async function createOrchestrationSystem() {
 }
 
 function now() {
-  return "2026-01-01T00:00:00.000Z";
+  return new Date().toISOString();
 }
 
 const hasMetricSnapshot = (
@@ -778,6 +773,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolverLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -920,6 +916,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolverLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));

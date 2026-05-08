@@ -29,7 +29,7 @@ export interface VcsProcessInput {
   readonly allowNonZeroExit?: boolean;
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
-  readonly truncateOutputAtMaxBytes?: boolean;
+  readonly appendTruncationMarker?: boolean;
 }
 
 export interface VcsProcessOutput {
@@ -80,13 +80,13 @@ export const collectText = Effect.fn("VcsProcess.collectText")(function* (input:
   readonly cwd: string;
   readonly stream: Stream.Stream<Uint8Array, VcsError>;
   readonly maxOutputBytes?: number;
-  readonly truncateOutputAtMaxBytes?: boolean;
+  readonly appendTruncationMarker?: boolean;
 }) {
   const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   return yield* collectUint8StreamText({
     stream: input.stream,
     maxBytes: maxOutputBytes,
-    truncatedMarker: input.truncateOutputAtMaxBytes ? OUTPUT_TRUNCATED_MARKER : null,
+    truncatedMarker: input.appendTruncationMarker ? OUTPUT_TRUNCATED_MARKER : null,
   });
 });
 
@@ -190,9 +190,10 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
       timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
       outputMode: "truncate",
-      truncatedMarker: input.truncateOutputAtMaxBytes ? OUTPUT_TRUNCATED_MARKER : "",
+      truncatedMarker: input.appendTruncationMarker ? OUTPUT_TRUNCATED_MARKER : "",
       timeoutBehavior: "error",
     }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.mapError((cause) => {
         if (cause instanceof ProcessSpawnError) {
           return new VcsProcessSpawnError({

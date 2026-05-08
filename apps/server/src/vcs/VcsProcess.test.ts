@@ -87,7 +87,7 @@ describe("VcsProcess.run", () => {
       args: ["-e", "process.stdout.write('x'.repeat(2048))"],
       cwd: process.cwd(),
       maxOutputBytes: 128,
-      truncateOutputAtMaxBytes: true,
+      appendTruncationMarker: true,
     });
 
     expect(result.stdoutTruncated).toBe(true);

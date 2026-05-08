@@ -1,15 +1,17 @@
 import type { RepositoryIdentity } from "@t3tools/contracts";
-import * as Cache from "effect/Cache";
-import * as Duration from "effect/Duration";
-import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
+import { Cache, Duration, Effect, Exit, Layer } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import {
   detectSourceControlProviderFromGitRemoteUrl,
   normalizeGitRemoteUrl,
 } from "@t3tools/shared/git";
 
-import { runProcess } from "../../processRunner.ts";
+import {
+  type ProcessRunError,
+  type ProcessRunInput,
+  type ProcessRunOutput,
+  runProcess,
+} from "../../processRunner.ts";
 import {
   RepositoryIdentityResolver,
   type RepositoryIdentityResolverShape,
@@ -83,12 +85,17 @@ interface RepositoryIdentityResolverOptions {
   readonly negativeCacheTtl?: Duration.Input;
 }
 
+type ManagedProcessRunner = (
+  input: ProcessRunInput,
+) => Effect.Effect<ProcessRunOutput, ProcessRunError>;
+
 const resolveRepositoryIdentityCacheKey = Effect.fn("resolveRepositoryIdentityCacheKey")(function* (
   cwd: string,
+  runManagedProcess: ManagedProcessRunner,
 ) {
   let cacheKey = cwd;
 
-  const topLevelResult = yield* runProcess({
+  const topLevelResult = yield* runManagedProcess({
     command: "git",
     args: ["-C", cwd, "rev-parse", "--show-toplevel"],
     timeoutBehavior: "result",
@@ -107,8 +114,11 @@ const resolveRepositoryIdentityCacheKey = Effect.fn("resolveRepositoryIdentityCa
 });
 
 const resolveRepositoryIdentityFromCacheKey = Effect.fn("resolveRepositoryIdentityFromCacheKey")(
-  function* (cacheKey: string): Effect.fn.Return<RepositoryIdentity | null> {
-    const remoteResult = yield* runProcess({
+  function* (
+    cacheKey: string,
+    runManagedProcess: ManagedProcessRunner,
+  ): Effect.fn.Return<RepositoryIdentity | null> {
+    const remoteResult = yield* runManagedProcess({
       command: "git",
       args: ["-C", cacheKey, "remote", "-v"],
       timeoutBehavior: "result",
@@ -125,8 +135,14 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn("resolveRepositoryIdenti
 
 export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityResolver")(
   function* (options: RepositoryIdentityResolverOptions = {}) {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const runManagedProcess: ManagedProcessRunner = (input) =>
+      runProcess(input).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+
     const repositoryIdentityCache = yield* Cache.makeWith<string, RepositoryIdentity | null>(
-      (cacheKey) => resolveRepositoryIdentityFromCacheKey(cacheKey),
+      (cacheKey) => resolveRepositoryIdentityFromCacheKey(cacheKey, runManagedProcess),
       {
         capacity: options.cacheCapacity ?? DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY,
         timeToLive: Exit.match({
@@ -142,7 +158,7 @@ export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityR
     const resolve: RepositoryIdentityResolverShape["resolve"] = Effect.fn(
       "RepositoryIdentityResolver.resolve",
     )(function* (cwd) {
-      const cacheKey = yield* resolveRepositoryIdentityCacheKey(cwd);
+      const cacheKey = yield* resolveRepositoryIdentityCacheKey(cwd, runManagedProcess);
       return yield* Cache.get(repositoryIdentityCache, cacheKey);
     });
 
