@@ -358,14 +358,17 @@ function checkWindowsSubprocessActivity(
     "if ($children) { exit 0 }",
     "exit 1",
   ].join("; ");
-  return runProcess({
-    command: "powershell.exe",
-    args: ["-NoProfile", "-NonInteractive", "-Command", command],
-    timeoutMs: 1_500,
-    maxOutputBytes: 32_768,
-    outputMode: "truncate",
-    shell: process.platform === "win32",
-    timeoutBehavior: "timedOutResult",
+  return Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    return yield* runProcess(spawner, {
+      command: "powershell.exe",
+      args: ["-NoProfile", "-NonInteractive", "-Command", command],
+      timeoutMs: 1_500,
+      maxOutputBytes: 32_768,
+      outputMode: "truncate",
+      shell: process.platform === "win32",
+      timeoutBehavior: "timedOutResult",
+    });
   }).pipe(
     Effect.map((result) => result.code === 0),
     Effect.mapError(
@@ -387,7 +390,8 @@ const checkPosixSubprocessActivity = Effect.fn("terminal.checkPosixSubprocessAct
   TerminalSubprocessCheckError,
   ChildProcessSpawner.ChildProcessSpawner
 > {
-  const runPgrep = runProcess({
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const runPgrep = runProcess(spawner, {
     command: "pgrep",
     args: ["-P", String(terminalPid)],
     timeoutMs: 1_000,
@@ -406,7 +410,7 @@ const checkPosixSubprocessActivity = Effect.fn("terminal.checkPosixSubprocessAct
     ),
   );
 
-  const runPs = runProcess({
+  const runPs = runProcess(spawner, {
     command: "ps",
     args: ["-eo", "pid=,ppid="],
     timeoutMs: 1_000,

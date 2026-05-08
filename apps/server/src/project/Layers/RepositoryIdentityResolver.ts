@@ -136,10 +136,7 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn("resolveRepositoryIdenti
 export const makeRepositoryIdentityResolver = Effect.fn("makeRepositoryIdentityResolver")(
   function* (options: RepositoryIdentityResolverOptions = {}) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const runManagedProcess: ManagedProcessRunner = (input) =>
-      runProcess(input).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      );
+    const runManagedProcess: ManagedProcessRunner = (input) => runProcess(spawner, input);
 
     const repositoryIdentityCache = yield* Cache.makeWith<string, RepositoryIdentity | null>(
       (cacheKey) => resolveRepositoryIdentityFromCacheKey(cacheKey, runManagedProcess),

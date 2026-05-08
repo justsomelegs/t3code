@@ -1,7 +1,7 @@
 import * as OS from "node:os";
 
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
+import { Effect, FileSystem } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { runProcess } from "../../processRunner.ts";
 
@@ -52,7 +52,8 @@ const runFriendlyLabelCommand = Effect.fn("runFriendlyLabelCommand")(function* (
   command: string,
   args: readonly string[],
 ) {
-  const result = yield* runProcess({
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const result = yield* runProcess(spawner, {
     command,
     args,
     timeoutBehavior: "timedOutResult",

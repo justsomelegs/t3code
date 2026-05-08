@@ -66,7 +66,7 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
       cwd: input.cwd,
     };
 
-    const result = yield* runProcess({
+    const result = yield* runProcess(spawner, {
       command: input.command,
       args: input.args,
       cwd: input.cwd,
@@ -79,7 +79,6 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
       truncatedMarker: input.appendTruncationMarker ? OUTPUT_TRUNCATED_MARKER : "",
       timeoutBehavior: "error",
     }).pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.mapError((cause) => {
         if (cause instanceof ProcessSpawnError) {
           return new VcsProcessSpawnError({

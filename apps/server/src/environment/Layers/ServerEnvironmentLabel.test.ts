@@ -66,6 +66,7 @@ describe("resolveServerEnvironmentLabel", () => {
 
       expect(result).toBe("Julius's MacBook Pro");
       expect(mockedRunProcess).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           command: "scutil",
           args: ["--get", "ComputerName"],
@@ -109,6 +110,7 @@ describe("resolveServerEnvironmentLabel", () => {
 
       expect(result).toBe("CI Runner");
       expect(mockedRunProcess).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           command: "hostnamectl",
           args: ["--pretty"],
