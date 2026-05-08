@@ -15,6 +15,7 @@ export interface VcsProcessInput {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd: string;
+  readonly spawnCwd?: string;
   readonly stdin?: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly allowNonZeroExit?: boolean;
@@ -94,7 +95,7 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
     const child = yield* spawner
       .spawn(
         ChildProcess.make(input.command, [...input.args], {
-          cwd: input.cwd,
+          cwd: input.spawnCwd ?? input.cwd,
           ...(input.env !== undefined
             ? {
                 env: {
@@ -176,7 +177,7 @@ export const make = Effect.fn("makeVcsProcess")(function* () {
       const child = yield* spawner
         .spawn(
           ChildProcess.make(input.command, [...input.args], {
-            cwd: input.cwd,
+            cwd: input.spawnCwd ?? input.cwd,
             ...(input.env !== undefined
               ? {
                   env: {

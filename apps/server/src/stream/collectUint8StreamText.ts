@@ -8,7 +8,7 @@ export interface CollectedUint8StreamText {
 }
 
 interface CollectState {
-  readonly text: string;
+  readonly parts: string[];
   readonly bytes: number;
   readonly truncated: boolean;
 }
@@ -25,7 +25,7 @@ export const collectUint8StreamText = <E>(input: {
   return input.stream.pipe(
     Stream.runFold(
       (): CollectState => ({
-        text: "",
+        parts: [],
         bytes: 0,
         truncated: false,
       }),
@@ -36,32 +36,47 @@ export const collectUint8StreamText = <E>(input: {
 
         const remainingBytes = maxBytes - state.bytes;
         if (remainingBytes <= 0) {
+          if (truncatedMarker.length > 0) {
+            state.parts.push(truncatedMarker);
+          }
           return {
             ...state,
-            text: `${state.text}${truncatedMarker}`,
             truncated: true,
           };
         }
 
         const nextChunk =
           chunk.byteLength > remainingBytes ? chunk.slice(0, remainingBytes) : chunk;
-        const text = `${state.text}${decoder.decode(nextChunk, { stream: true })}`;
+        const text = decoder.decode(nextChunk, { stream: true });
+        if (text.length > 0) {
+          state.parts.push(text);
+        }
         const bytes = state.bytes + nextChunk.byteLength;
         const truncated = chunk.byteLength > remainingBytes;
+        if (truncated && truncatedMarker.length > 0) {
+          state.parts.push(truncatedMarker);
+        }
 
         return {
-          text: truncated ? `${text}${truncatedMarker}` : text,
+          parts: state.parts,
           bytes,
           truncated,
         };
       },
     ),
-    Effect.map(
-      (state): CollectedUint8StreamText => ({
-        text: state.truncated ? state.text : `${state.text}${decoder.decode()}`,
+    Effect.map((state): CollectedUint8StreamText => {
+      if (!state.truncated) {
+        const trailingText = decoder.decode();
+        if (trailingText.length > 0) {
+          state.parts.push(trailingText);
+        }
+      }
+
+      return {
+        text: state.parts.join(""),
         bytes: state.bytes,
         truncated: state.truncated,
-      }),
-    ),
+      };
+    }),
   );
 };

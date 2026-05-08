@@ -325,8 +325,9 @@ const gitCommand = (
   process.run({
     operation,
     command: "git",
-    args,
+    args: ["-C", cwd, ...args],
     cwd,
+    spawnCwd: globalThis.process.cwd(),
     ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
     ...(options?.env !== undefined ? { env: options.env } : {}),
     ...(options?.allowNonZeroExit !== undefined
@@ -754,6 +755,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           "diff",
           "--patch",
           "--no-color",
+          "--no-ext-diff",
+          "--no-textconv",
           ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
           `${fromRevision}^{commit}`,
           `${input.toCheckpointRef}^{commit}`,
